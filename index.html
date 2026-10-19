@@ -29,6 +29,11 @@
             border-color: #F58220 !important;
             box-shadow: 0 0 0 2px rgba(245, 130, 32, 0.2) !important;
         }
+
+        /* Hide default datalist arrow in some browsers */
+        input::-webkit-calendar-picker-indicator {
+            display: none !important;
+        }
     </style>
     <script>
         tailwind.config = {
@@ -65,11 +70,23 @@
             { username: 'user2', password: 'pass456', name: 'Second User' }
         ];
 
+        const FIXED_LOCATIONS = [
+            "Alorica Site - Maadi",
+            "Alorica Site - Smart Village",
+            "Cairo International Airport",
+            "City Center Maadi",
+            "Downtown Cairo",
+            "New Cairo - 5th Settlement",
+            "6th of October City",
+            "Alexandria - City Center"
+        ];
+
         const App = () => {
             const [isLoggedIn, setIsLoggedIn] = useState(false);
             const [currentUser, setCurrentUser] = useState(null);
             const [loginData, setLoginData] = useState({ username: '', password: '' });
             const [error, setError] = useState('');
+            const [locating, setLocating] = useState(false);
             
             const [formData, setFormData] = useState({
                 arrival: '',
@@ -113,6 +130,27 @@
                 XLSX.writeFile(wb, `Alorica_Booking_${formData.arrival}.xlsx`);
                 
                 alert('Booking saved successfully and exported to Excel');
+            };
+
+            const getCurrentLocation = (field) => {
+                if (!navigator.geolocation) {
+                    alert("Geolocation is not supported by your browser");
+                    return;
+                }
+
+                setLocating(true);
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const { latitude, longitude } = position.coords;
+                        const locationStr = `Lat: ${latitude.toFixed(4)}, Lon: ${longitude.toFixed(4)}`;
+                        setFormData(prev => ({ ...prev, [field]: locationStr }));
+                        setLocating(false);
+                    },
+                    (error) => {
+                        alert("Unable to retrieve your location: " + error.message);
+                        setLocating(false);
+                    }
+                );
             };
 
             if (!isLoggedIn) {
@@ -204,47 +242,77 @@
 
                             <form onSubmit={handleBooking} className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div className="space-y-6">
+                                    {/* Arrival Field */}
                                     <div>
-                                        <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2">
-                                            <Icon name="map-pin" size={18} className="text-alorica-orange" /> Arrival
+                                        <label className="flex items-center justify-between text-alorica-blue font-bold mb-2">
+                                            <span className="flex items-center gap-2"><Icon name="map-pin" size={18} className="text-alorica-orange" /> Arrival</span>
+                                            <button 
+                                                type="button" 
+                                                onClick={() => getCurrentLocation('arrival')}
+                                                className="text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1"
+                                            >
+                                                <Icon name="locate" size={12} /> My Location
+                                            </button>
                                         </label>
                                         <input
-                                            type="text"
+                                            list="fixed-locations"
                                             required
-                                            placeholder="Enter arrival point"
+                                            placeholder="Select or enter arrival point"
                                             className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50"
                                             value={formData.arrival}
                                             onChange={(e) => setFormData({...formData, arrival: e.target.value})}
                                         />
                                     </div>
 
+                                    {/* Departure Field */}
                                     <div>
-                                        <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2">
-                                            <Icon name="map-pin" size={18} className="text-alorica-orange" /> Departure
+                                        <label className="flex items-center justify-between text-alorica-blue font-bold mb-2">
+                                            <span className="flex items-center gap-2"><Icon name="map-pin" size={18} className="text-alorica-orange" /> Departure</span>
+                                            <button 
+                                                type="button" 
+                                                onClick={() => getCurrentLocation('departure')}
+                                                className="text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1"
+                                            >
+                                                <Icon name="locate" size={12} /> My Location
+                                            </button>
                                         </label>
                                         <input
-                                            type="text"
+                                            list="fixed-locations"
                                             required
-                                            placeholder="Enter departure point"
+                                            placeholder="Select or enter departure point"
                                             className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50"
                                             value={formData.departure}
                                             onChange={(e) => setFormData({...formData, departure: e.target.value})}
                                         />
                                     </div>
 
+                                    {/* Drop off location Field */}
                                     <div>
-                                        <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2">
-                                            <Icon name="navigation" size={18} className="text-alorica-orange" /> Drop off location
+                                        <label className="flex items-center justify-between text-alorica-blue font-bold mb-2">
+                                            <span className="flex items-center gap-2"><Icon name="navigation" size={18} className="text-alorica-orange" /> Drop off location</span>
+                                            <button 
+                                                type="button" 
+                                                onClick={() => getCurrentLocation('dropOffLocation')}
+                                                className="text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1"
+                                            >
+                                                <Icon name="locate" size={12} /> My Location
+                                            </button>
                                         </label>
                                         <input
-                                            type="text"
+                                            list="fixed-locations"
                                             required
-                                            placeholder="Enter drop off location"
+                                            placeholder="Select or enter drop off location"
                                             className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50"
                                             value={formData.dropOffLocation}
-                                        onChange={(e) => setFormData({...formData, dropOffLocation: e.target.value})}
+                                            onChange={(e) => setFormData({...formData, dropOffLocation: e.target.value})}
                                         />
                                     </div>
+
+                                    <datalist id="fixed-locations">
+                                        {FIXED_LOCATIONS.map((loc, index) => (
+                                            <option key={index} value={loc} />
+                                        ))}
+                                    </datalist>
                                 </div>
 
                                 <div className="space-y-6">
@@ -283,9 +351,10 @@
                                 <div className="md:col-span-2 mt-4">
                                     <button
                                         type="submit"
-                                        className="w-full bg-alorica-orange hover:shadow-2xl text-white font-black text-xl py-5 rounded-2xl shadow-xl transform active:scale-[0.98] transition-all flex items-center justify-center gap-3 group"
+                                        disabled={locating}
+                                        className={`w-full bg-alorica-orange hover:shadow-2xl text-white font-black text-xl py-5 rounded-2xl shadow-xl transform active:scale-[0.98] transition-all flex items-center justify-center gap-3 group ${locating ? 'opacity-70 cursor-wait' : ''}`}
                                     >
-                                        Book now
+                                        {locating ? 'Detecting Location...' : 'Book now'}
                                         <Icon name="chevron-right" size={24} className="group-hover:translate-x-2 transition-transform" />
                                     </button>
                                 </div>
