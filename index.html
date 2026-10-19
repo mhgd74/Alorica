@@ -147,9 +147,25 @@
                         setLocating(false);
                     },
                     (error) => {
-                        alert("Unable to retrieve your location: " + error.message);
+                        let msg = "";
+                        switch(error.code) {
+                            case error.PERMISSION_DENIED:
+                                msg = "Permission denied. Please enable location services.";
+                                break;
+                            case error.POSITION_UNAVAILABLE:
+                                msg = "Location information is unavailable.";
+                                break;
+                            case error.TIMEOUT:
+                                msg = "The request to get user location timed out.";
+                                break;
+                            default:
+                                msg = "An unknown error occurred.";
+                                break;
+                        }
+                        alert("Error: " + msg);
                         setLocating(false);
-                    }
+                    },
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
                 );
             };
 
@@ -240,16 +256,16 @@
                                 <p className="opacity-80">Please fill in the details below to complete your booking</p>
                             </div>
 
-                            <form onSubmit={handleBooking} className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <form onSubmit={handleBooking} className="p-4 sm:p-8 grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
                                 <div className="space-y-6">
                                     {/* Arrival Field */}
                                     <div>
-                                        <label className="flex items-center justify-between text-alorica-blue font-bold mb-2">
+                                        <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
                                             <span className="flex items-center gap-2"><Icon name="map-pin" size={18} className="text-alorica-orange" /> Arrival</span>
                                             <button 
                                                 type="button" 
                                                 onClick={() => getCurrentLocation('arrival')}
-                                                className="text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1"
+                                                className="text-[10px] sm:text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1 shrink-0"
                                             >
                                                 <Icon name="locate" size={12} /> My Location
                                             </button>
@@ -258,7 +274,7 @@
                                             list="fixed-locations"
                                             required
                                             placeholder="Select or enter arrival point"
-                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50"
+                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm sm:text-base"
                                             value={formData.arrival}
                                             onChange={(e) => setFormData({...formData, arrival: e.target.value})}
                                         />
@@ -266,12 +282,12 @@
 
                                     {/* Departure Field */}
                                     <div>
-                                        <label className="flex items-center justify-between text-alorica-blue font-bold mb-2">
+                                        <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
                                             <span className="flex items-center gap-2"><Icon name="map-pin" size={18} className="text-alorica-orange" /> Departure</span>
                                             <button 
                                                 type="button" 
                                                 onClick={() => getCurrentLocation('departure')}
-                                                className="text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1"
+                                                className="text-[10px] sm:text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1 shrink-0"
                                             >
                                                 <Icon name="locate" size={12} /> My Location
                                             </button>
@@ -280,7 +296,7 @@
                                             list="fixed-locations"
                                             required
                                             placeholder="Select or enter departure point"
-                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50"
+                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm sm:text-base"
                                             value={formData.departure}
                                             onChange={(e) => setFormData({...formData, departure: e.target.value})}
                                         />
@@ -288,12 +304,12 @@
 
                                     {/* Drop off location Field */}
                                     <div>
-                                        <label className="flex items-center justify-between text-alorica-blue font-bold mb-2">
+                                        <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
                                             <span className="flex items-center gap-2"><Icon name="navigation" size={18} className="text-alorica-orange" /> Drop off location</span>
                                             <button 
                                                 type="button" 
                                                 onClick={() => getCurrentLocation('dropOffLocation')}
-                                                className="text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1"
+                                                className="text-[10px] sm:text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1 shrink-0"
                                             >
                                                 <Icon name="locate" size={12} /> My Location
                                             </button>
@@ -302,7 +318,7 @@
                                             list="fixed-locations"
                                             required
                                             placeholder="Select or enter drop off location"
-                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50"
+                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm sm:text-base"
                                             value={formData.dropOffLocation}
                                             onChange={(e) => setFormData({...formData, dropOffLocation: e.target.value})}
                                         />
