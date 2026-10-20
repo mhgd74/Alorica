@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Alorica Booking System</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2300385F'/%3E%3Ctext x='50' y='70' font-size='64' font-family='Arial' font-weight='bold' text-anchor='middle' fill='%23F58220'%3Ea%3C/text%3E%3C/svg%3E">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -71,15 +72,35 @@
         ];
 
         const FIXED_LOCATIONS = [
-            "Alorica Site - Maadi",
-            "Alorica Site - Smart Village",
-            "Cairo International Airport",
-            "City Center Maadi",
-            "Downtown Cairo",
-            "New Cairo - 5th Settlement",
-            "6th of October City",
-            "Alexandria - City Center"
+            "R1",
+            "R2",
+            "R3",
+            "R4",
+            "R5",
+            "R6",
+            "R7",
+            "R8",
+            "R9"
         ];
+
+        const getOffsetHours = (tz) => {
+            if (!tz) return -(new Date().getTimezoneOffset() / 60);
+            const m = tz.match(/GMT\s*([+-]\d+)?/);
+            if (!m || !m[1]) return 0;
+            return parseInt(m[1], 10);
+        };
+
+        const formatClock = (date, offset) => {
+            const z = new Date(date.getTime() + offset * 3600000);
+            return {
+                hh: String(z.getUTCHours()).padStart(2, '0'),
+                mm: String(z.getUTCMinutes()).padStart(2, '0'),
+                ss: String(z.getUTCSeconds()).padStart(2, '0'),
+            };
+        };
+
+        const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+        const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
 
         const App = () => {
             const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -87,14 +108,22 @@
             const [loginData, setLoginData] = useState({ username: '', password: '' });
             const [error, setError] = useState('');
             const [locating, setLocating] = useState(false);
-            
+            const [activeTab, setActiveTab] = useState('arrival');
+            const [now, setNow] = useState(new Date());
+
             const [formData, setFormData] = useState({
-                arrival: '',
-                departure: '',
                 dropOffLocation: '',
                 timeZone: '',
+                time: '',
                 date: new Date().toISOString().split('T')[0],
             });
+            
+           
+
+            useEffect(() => {
+                const timer = setInterval(() => setNow(new Date()), 1000);
+                return () => clearInterval(timer);
+            }, []);
 
             const handleLogin = (e) => {
                 e.preventDefault();
@@ -116,10 +145,10 @@
                 
                 const dataToExport = [{
                     'User Name': currentUser.name,
-                    'Arrival': formData.arrival,
-                    'Departure': formData.departure,
-                    'Drop off location': formData.dropOffLocation,
+                    'Type': activeTab === 'arrival' ? 'Arrival' : 'Departure',
+                    'Location': formData.dropOffLocation,
                     'Time zone': formData.timeZone,
+                    'Time': formData.time || `${clock.hh}:${clock.mm}`,
                     'Date': formData.date,
                     'Booking Time': new Date().toLocaleString()
                 }];
@@ -127,7 +156,7 @@
                 const wb = XLSX.utils.book_new();
                 const ws = XLSX.utils.json_to_sheet(dataToExport);
                 XLSX.utils.book_append_sheet(wb, ws, "Bookings");
-                XLSX.writeFile(wb, `Alorica_Booking_${formData.arrival}.xlsx`);
+                XLSX.writeFile(wb, `Alorica_${activeTab}_Booking_${formData.date}.xlsx`);
                 
                 alert('Booking saved successfully and exported to Excel');
             };
@@ -168,6 +197,16 @@
                     { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
                 );
             };
+
+            const clock = formatClock(now, getOffsetHours(formData.timeZone));
+            const dropOffLabel = activeTab === 'arrival' ? 'Pickup location' : 'Drop off location';
+            const dropOffIcon = activeTab === 'arrival' ? 'map-pin' : 'navigation';
+            const timeLabel = activeTab === 'arrival' ? 'Pickup time' : 'Drop-off time';
+            const timeParts = formData.time ? formData.time.split(':') : [clock.hh, clock.mm];
+            const selHour = timeParts[0];
+            const selMinute = timeParts[1];
+            const displayTime = formData.time || `${clock.hh}:${clock.mm}`;
+            const [displayHh, displayMm] = displayTime.split(':');
 
             if (!isLoggedIn) {
                 return (
@@ -252,60 +291,42 @@
                     <main className="max-w-4xl mx-auto p-6 mt-8 fade-in">
                         <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-white">
                             <div className="bg-alorica-blue p-8 text-white text-center">
-                                <h2 className="text-3xl font-bold mb-2">Appointment Booking System</h2>
-                                <p className="opacity-80">Please fill in the details below to complete your booking</p>
+                                <h2 className="text-3xl font-bold mb-2">Transportation</h2>
+                                <p className="opacity-80">Select Arrival or Departure to complete your booking</p>
                             </div>
 
-                            <form onSubmit={handleBooking} className="p-4 sm:p-8 grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
-                                <div className="space-y-6">
-                                    {/* Arrival Field */}
-                                    <div>
-                                        <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
-                                            <span className="flex items-center gap-2"><Icon name="map-pin" size={18} className="text-alorica-orange" /> Arrival</span>
-                                            <button 
-                                                type="button" 
-                                                onClick={() => getCurrentLocation('arrival')}
-                                                className="text-[10px] sm:text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1 shrink-0"
-                                            >
-                                                <Icon name="locate" size={12} /> My Location
-                                            </button>
-                                        </label>
-                                        <input
-                                            list="fixed-locations"
-                                            required
-                                            placeholder="Select or enter arrival point"
-                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm sm:text-base"
-                                            value={formData.arrival}
-                                            onChange={(e) => setFormData({...formData, arrival: e.target.value})}
-                                        />
-                                    </div>
+                            {/* Arrival / Departure Tabs */}
+                            <div className="flex justify-center gap-3 sm:gap-4 pt-6 px-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveTab('arrival')}
+                                    className={`flex items-center gap-2 px-8 sm:px-12 py-3 rounded-xl font-bold text-sm sm:text-base transition-all ${
+                                        activeTab === 'arrival'
+                                            ? 'bg-alorica-orange text-white shadow-lg scale-105'
+                                            : 'bg-gray-100 text-alorica-blue hover:bg-alorica-light'
+                                    }`}
+                                >
+                                    <Icon name="plane-landing" size={18} /> Arrival
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveTab('departure')}
+                                    className={`flex items-center gap-2 px-8 sm:px-12 py-3 rounded-xl font-bold text-sm sm:text-base transition-all ${
+                                        activeTab === 'departure'
+                                            ? 'bg-alorica-orange text-white shadow-lg scale-105'
+                                            : 'bg-gray-100 text-alorica-blue hover:bg-alorica-light'
+                                    }`}
+                                >
+                                    <Icon name="plane-takeoff" size={18} /> Departure
+                                </button>
+                            </div>
 
-                                    {/* Departure Field */}
+                            <form key={activeTab} onSubmit={handleBooking} className="p-4 sm:p-8 fade-in">
+                                <div className="max-w-2xl mx-auto space-y-6">
+                                    {/* Pickup (Arrival) / Drop off (Departure) location Field */}
                                     <div>
                                         <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
-                                            <span className="flex items-center gap-2"><Icon name="map-pin" size={18} className="text-alorica-orange" /> Departure</span>
-                                            <button 
-                                                type="button" 
-                                                onClick={() => getCurrentLocation('departure')}
-                                                className="text-[10px] sm:text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1 shrink-0"
-                                            >
-                                                <Icon name="locate" size={12} /> My Location
-                                            </button>
-                                        </label>
-                                        <input
-                                            list="fixed-locations"
-                                            required
-                                            placeholder="Select or enter departure point"
-                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm sm:text-base"
-                                            value={formData.departure}
-                                            onChange={(e) => setFormData({...formData, departure: e.target.value})}
-                                        />
-                                    </div>
-
-                                    {/* Drop off location Field */}
-                                    <div>
-                                        <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
-                                            <span className="flex items-center gap-2"><Icon name="navigation" size={18} className="text-alorica-orange" /> Drop off location</span>
+                                            <span className="flex items-center gap-2"><Icon name={dropOffIcon} size={18} className="text-alorica-orange" /> {dropOffLabel}</span>
                                             <button 
                                                 type="button" 
                                                 onClick={() => getCurrentLocation('dropOffLocation')}
@@ -317,37 +338,71 @@
                                         <input
                                             list="fixed-locations"
                                             required
-                                            placeholder="Select or enter drop off location"
+                                            placeholder={`Select or enter ${dropOffLabel.toLowerCase()}`}
                                             className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm sm:text-base"
                                             value={formData.dropOffLocation}
                                             onChange={(e) => setFormData({...formData, dropOffLocation: e.target.value})}
                                         />
                                     </div>
 
-                                    <datalist id="fixed-locations">
-                                        {FIXED_LOCATIONS.map((loc, index) => (
-                                            <option key={index} value={loc} />
-                                        ))}
-                                    </datalist>
-                                </div>
-
-                                <div className="space-y-6">
+                                    {/* Pickup / Drop-off time picker (clock) */}
                                     <div>
                                         <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2">
-                                            <Icon name="globe" size={18} className="text-alorica-orange" /> Time zone
+                                            <Icon name="clock" size={18} className="text-alorica-orange" /> {timeLabel}
                                         </label>
-                                        <select
-                                            required
-                                            className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50"
-                                            value={formData.timeZone}
-                                            onChange={(e) => setFormData({...formData, timeZone: e.target.value})}
-                                        >
-                                            <option value="">Select timezone</option>
-                                            <option value="GMT+2">Cairo (GMT+2)</option>
-                                            <option value="GMT">London (GMT)</option>
-                                            <option value="GMT-5">New York (GMT-5)</option>
-                                            <option value="GMT+8">Dubai (GMT+4)</option>
-                                        </select>
+                                        <div className="rounded-xl border-2 border-gray-100 bg-gray-50 p-4">
+                                            <div className="flex items-center justify-center font-mono font-bold text-alorica-blue mb-1">
+                                                <span className="text-4xl sm:text-5xl">{displayHh}</span>
+                                                <span className="text-4xl sm:text-5xl text-alorica-orange animate-pulse mx-1">:</span>
+                                                <span className="text-4xl sm:text-5xl">{displayMm}</span>
+                                            </div>
+                                            <p className="text-center text-xs text-gray-400 mb-4">
+                                                {formData.time ? 'Selected time' : 'Current time — pick yours below'}
+                                            </p>
+                                            <div className="grid grid-cols-2 gap-3 mb-3">
+                                                <div>
+                                                    <span className="block text-xs font-semibold text-gray-500 mb-1 text-center">Hour</span>
+                                                    <select
+                                                        className="w-full px-3 py-3 border-2 border-gray-100 rounded-xl outline-none bg-white text-center font-semibold"
+                                                        value={selHour}
+                                                        onChange={(e) => setFormData({ ...formData, time: `${e.target.value}:${selMinute}` })}
+                                                    >
+                                                        {HOURS.map((h) => <option key={h} value={h}>{h}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <span className="block text-xs font-semibold text-gray-500 mb-1 text-center">Minute</span>
+                                                    <select
+                                                        className="w-full px-3 py-3 border-2 border-gray-100 rounded-xl outline-none bg-white text-center font-semibold"
+                                                        value={selMinute}
+                                                        onChange={(e) => setFormData({ ...formData, time: `${selHour}:${e.target.value}` })}
+                                                    >
+                                                        {MINUTES.map((m) => <option key={m} value={m}>{m}</option>)}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setFormData({ ...formData, time: `${clock.hh}:${clock.mm}` })}
+                                                    className="text-xs bg-alorica-light text-alorica-blue px-3 py-3 rounded-xl font-semibold hover:bg-blue-100 transition-colors whitespace-nowrap flex items-center gap-1 shrink-0"
+                                                >
+                                                    <Icon name="clock" size={14} /> Now
+                                                </button>
+                                                <select
+                                                    required
+                                                    className="flex-1 min-w-0 px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-white"
+                                                    value={formData.timeZone}
+                                                    onChange={(e) => setFormData({...formData, timeZone: e.target.value})}
+                                                >
+                                                    <option value="">Select timezone</option>
+                                                    <option value="GMT+2">Cairo (GMT+2)</option>
+                                                    <option value="GMT">London (GMT)</option>
+                                                    <option value="GMT-5">New York (GMT-5)</option>
+                                                    <option value="GMT+4">Dubai (GMT+4)</option>
+                                                </select>
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <div>
@@ -362,17 +417,23 @@
                                             onChange={(e) => setFormData({...formData, date: e.target.value})}
                                         />
                                     </div>
-                                </div>
 
-                                <div className="md:col-span-2 mt-4">
-                                    <button
-                                        type="submit"
-                                        disabled={locating}
-                                        className={`w-full bg-alorica-orange hover:shadow-2xl text-white font-black text-xl py-5 rounded-2xl shadow-xl transform active:scale-[0.98] transition-all flex items-center justify-center gap-3 group ${locating ? 'opacity-70 cursor-wait' : ''}`}
-                                    >
-                                        {locating ? 'Detecting Location...' : 'Book now'}
-                                        <Icon name="chevron-right" size={24} className="group-hover:translate-x-2 transition-transform" />
-                                    </button>
+                                    <datalist id="fixed-locations">
+                                        {FIXED_LOCATIONS.map((loc, index) => (
+                                            <option key={index} value={loc} />
+                                        ))}
+                                    </datalist>
+
+                                    <div className="pt-2">
+                                        <button
+                                            type="submit"
+                                            disabled={locating}
+                                            className={`w-full bg-alorica-orange hover:shadow-2xl text-white font-black text-xl py-5 rounded-2xl shadow-xl transform active:scale-[0.98] transition-all flex items-center justify-center gap-3 group ${locating ? 'opacity-70 cursor-wait' : ''}`}
+                                        >
+                                            {locating ? 'Detecting Location...' : 'Book now'}
+                                            <Icon name="chevron-right" size={24} className="group-hover:translate-x-2 transition-transform" />
+                                        </button>
+                                    </div>
                                 </div>
                             </form>
                         </div>
