@@ -3,27 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#00385F">
+    <meta name="description" content="Alorica employee transportation booking system">
     <title>Alorica Booking System</title>
+    <link rel="manifest" href="manifest.json">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2300385F'/%3E%3Ctext x='50' y='70' font-size='64' font-family='Arial' font-weight='bold' text-anchor='middle' fill='%23F58220'%3Ea%3C/text%3E%3C/svg%3E">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+
+    <!-- Libraries are served locally so the system works on the company network / offline -->
+    <script src="vendor/tailwind.js"></script>
+    <script src="vendor/react.production.min.js"></script>
+    <script src="vendor/react-dom.production.min.js"></script>
+    <script src="vendor/babel.min.js"></script>
+    <script src="vendor/lucide.js"></script>
+    <script src="vendor/xlsx.bundle.js"></script>
+
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }
         .alorica-blue { color: #00385F; }
         .bg-alorica-blue { background-color: #00385F; }
         .alorica-orange { color: #F58220; }
         .bg-alorica-orange { background-color: #F58220; }
         .bg-alorica-light { background-color: #E6F0F7; }
-        
+
         .fade-in { animation: fadeIn 0.5s ease-in; }
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
+        }
+
+        .toast-in { animation: toastIn 0.25s ease-out; }
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
         }
 
         input:focus, select:focus {
@@ -56,36 +68,78 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
-        const Icon = ({ name, size = 24, className = "" }) => {
-            useEffect(() => {
-                lucide.createIcons();
-            }, [name]);
-            return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
-        };
+        /* =============================================================
+         * 1. Configuration
+         * ============================================================= */
 
+        // Built-in accounts. Kept out of the UI on purpose.
         const DEFAULT_USERS = [
             { username: 'admin', password: 'admin123', name: 'System Admin' },
             { username: 'user1', password: 'pass123', name: 'First User' },
             { username: 'user2', password: 'pass456', name: 'Second User' }
         ];
 
-        const FIXED_LOCATIONS = [
-            "R1",
-            "R2",
-            "R3",
-            "R4",
-            "R5",
-            "R6",
-            "R7",
-            "R8",
-            "R9"
+        // Fixed pickup routes / points
+        const FIXED_LOCATIONS = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"];
+
+        const TIMEZONES = [
+            { value: 'GMT+2', label: 'Cairo (GMT+2)' },
+            { value: 'GMT', label: 'London (GMT)' },
+            { value: 'GMT-5', label: 'New York (GMT-5)' },
+            { value: 'GMT+4', label: 'Dubai (GMT+4)' }
         ];
+
+        // Default fleet — the admin can add / remove buses and change capacities.
+        const DEFAULT_BUSES = [
+            { id: 'bus-1', name: 'Bus 1', capacity: 14 },
+            { id: 'bus-2', name: 'Bus 2', capacity: 14 },
+            { id: 'bus-3', name: 'Bus 3', capacity: 26 }
+        ];
+
+        const WAITLIST = 'Waitlist';
+
+        const STORAGE = {
+            bookings: 'alorica_bookings',
+            users: 'alorica_custom_users',
+            buses: 'alorica_buses'
+        };
+
+        const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+        /* =============================================================
+         * 2. Small helpers
+         * ============================================================= */
+
+        const loadJSON = (key, fallback) => {
+            try {
+                const raw = localStorage.getItem(key);
+                return raw ? JSON.parse(raw) : fallback;
+            } catch (e) {
+                return fallback;
+            }
+        };
+
+        const saveJSON = (key, value) => {
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+            } catch (e) {
+                /* storage full or unavailable */
+            }
+        };
+
+        const pad = (n) => String(n).padStart(2, '0');
+
+        // Local (not UTC) YYYY-MM-DD so the date picker never shifts by a day
+        const todayISO = () => {
+            const d = new Date();
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        };
 
         const getOffsetHours = (tz) => {
             if (!tz) return -(new Date().getTimezoneOffset() / 60);
-            const m = tz.match(/GMT\s*([+-]\d+)?/);
+            const m = String(tz).match(/GMT\s*([+-]\d+)?/);
             if (!m || !m[1]) return 0;
             return parseInt(m[1], 10);
         };
@@ -93,43 +147,20 @@
         const formatClock = (date, offset) => {
             const z = new Date(date.getTime() + offset * 3600000);
             return {
-                hh: String(z.getUTCHours()).padStart(2, '0'),
-                mm: String(z.getUTCMinutes()).padStart(2, '0'),
-                ss: String(z.getUTCSeconds()).padStart(2, '0'),
+                hh: pad(z.getUTCHours()),
+                mm: pad(z.getUTCMinutes()),
+                ss: pad(z.getUTCSeconds())
             };
         };
 
-        const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
-        const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
-
-        const STORAGE_KEY = 'alorica_bookings';
-        const USERS_STORAGE_KEY = 'alorica_custom_users';
-        const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-
-        const loadBookings = () => {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                return raw ? JSON.parse(raw) : [];
-            } catch (e) {
-                return [];
-            }
-        };
-
-        // Users created by the admin (stored locally in the browser)
-        const loadCustomUsers = () => {
-            try {
-                const raw = localStorage.getItem(USERS_STORAGE_KEY);
-                return raw ? JSON.parse(raw) : [];
-            } catch (e) {
-                return [];
-            }
-        };
+        const HOURS = Array.from({ length: 24 }, (_, i) => pad(i));
+        const MINUTES = Array.from({ length: 60 }, (_, i) => pad(i));
 
         const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
         }[c]));
 
-        // Group bookings by day and return them sorted chronologically
+        // Group bookings by day, sorted chronologically
         const groupByDay = (bookings) => {
             const byDay = {};
             bookings.forEach((b) => {
@@ -140,26 +171,200 @@
             return Object.keys(byDay).sort().map((day) => ({ day, items: byDay[day] }));
         };
 
-        // Build a workbook with one sheet per day of the month
-        const buildWorkbook = (bookings) => {
+        const uniqueEmployeeCount = (list) => new Set(list.map((b) => b.employeeId)).size;
+
+        /* =============================================================
+         * 3. Bus distribution
+         * ============================================================= */
+
+        // Pick the first bus on that day that still has room, otherwise the waitlist.
+        const assignBus = (booking, existing, buses) => {
+            const used = {};
+            buses.forEach((bus) => { used[bus.name] = 0; });
+            existing
+                .filter((b) => b.date === booking.date && b.bus && b.bus !== WAITLIST)
+                .forEach((b) => { if (used[b.bus] != null) used[b.bus] += 1; });
+            const bus = buses.find((b) => used[b.name] < b.capacity);
+            return bus ? bus.name : WAITLIST;
+        };
+
+        // Re-run the automatic distribution for every day. Manual assignments are kept.
+        const redistribute = (bookings, buses) => {
+            const byDay = {};
+            bookings.forEach((b) => { (byDay[b.date] = byDay[b.date] || []).push(b); });
+
+            const next = {};
+            Object.keys(byDay).forEach((day) => {
+                const items = byDay[day].slice().sort((a, b) => String(a.time).localeCompare(String(b.time)));
+                const used = {};
+                buses.forEach((bus) => { used[bus.name] = 0; });
+
+                items
+                    .filter((b) => b.busManual && b.bus && b.bus !== WAITLIST && used[b.bus] != null)
+                    .forEach((b) => { used[b.bus] += 1; });
+
+                items.forEach((b) => {
+                    if (b.busManual) return;
+                    const bus = buses.find((x) => used[x.name] < x.capacity);
+                    if (bus) {
+                        next[b.id] = bus.name;
+                        used[bus.name] += 1;
+                    } else {
+                        next[b.id] = WAITLIST;
+                    }
+                });
+            });
+
+            return bookings.map((b) => (next[b.id] ? { ...b, bus: next[b.id] } : b));
+        };
+
+        /* =============================================================
+         * 4. Excel report (one sheet per day + a summary sheet)
+         * ============================================================= */
+
+        const THIN = { style: 'thin', color: { rgb: 'C9D6E2' } };
+        const BORDER = { top: THIN, bottom: THIN, left: THIN, right: THIN };
+
+        const TITLE_STYLE = {
+            font: { bold: true, sz: 13, color: { rgb: 'FFFFFF' } },
+            fill: { fgColor: { rgb: '00385F' } },
+            alignment: { horizontal: 'center', vertical: 'center' }
+        };
+        const HEADER_STYLE = {
+            font: { bold: true, sz: 11, color: { rgb: 'FFFFFF' } },
+            fill: { fgColor: { rgb: 'F58220' } },
+            alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+            border: BORDER
+        };
+        const BODY_STYLE = {
+            font: { sz: 11, color: { rgb: '1F2937' } },
+            alignment: { vertical: 'center' },
+            border: BORDER
+        };
+        const WAITLIST_STYLE = {
+            font: { sz: 11, bold: true, color: { rgb: 'B91C1C' } },
+            alignment: { vertical: 'center' },
+            border: BORDER
+        };
+        const TOTAL_STYLE = {
+            font: { bold: true, sz: 11, color: { rgb: '00385F' } },
+            fill: { fgColor: { rgb: 'E6F0F7' } },
+            alignment: { vertical: 'center' },
+            border: BORDER
+        };
+
+        const setCell = (ws, r, c, value, style) => {
+            const addr = XLSX.utils.encode_cell({ r, c });
+            const isNum = typeof value === 'number';
+            ws[addr] = { v: value == null ? '' : value, t: isNum ? 'n' : 's', s: style };
+        };
+
+        const DAY_HEADERS = ['Employee Name', 'Employee ID', 'Booking Time', 'Pickup Point', 'Type', 'Bus'];
+
+        const buildDaySheet = (day, items) => {
+            const ws = {};
+            const lastCol = DAY_HEADERS.length - 1;
+            ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: items.length + 2, c: lastCol } });
+
+            // Row 1 — title (merged)
+            setCell(ws, 0, 0, `Alorica — Transportation Bookings — ${day}`, TITLE_STYLE);
+            for (let c = 1; c <= lastCol; c++) setCell(ws, 0, c, '', TITLE_STYLE);
+
+            // Row 2 — headers
+            DAY_HEADERS.forEach((h, c) => setCell(ws, 1, c, h, HEADER_STYLE));
+
+            // Data rows
+            items.forEach((b, i) => {
+                const r = i + 2;
+                setCell(ws, r, 0, b.employeeName || '', BODY_STYLE);
+                setCell(ws, r, 1, String(b.employeeId || ''), BODY_STYLE);
+                setCell(ws, r, 2, b.time || '', BODY_STYLE);
+                setCell(ws, r, 3, b.location || '', BODY_STYLE);
+                setCell(ws, r, 4, b.type || '', BODY_STYLE);
+                setCell(ws, r, 5, b.bus || '-', b.bus === WAITLIST ? WAITLIST_STYLE : BODY_STYLE);
+            });
+
+            // Total row
+            const totalRow = items.length + 2;
+            setCell(ws, totalRow, 0, 'Total bookings', TOTAL_STYLE);
+            for (let c = 1; c < lastCol; c++) setCell(ws, totalRow, c, '', TOTAL_STYLE);
+            setCell(ws, totalRow, lastCol, items.length, TOTAL_STYLE);
+
+            ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } }];
+            ws['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 32 }, { wch: 12 }, { wch: 14 }];
+            ws['!rows'] = [{ hpt: 24 }, { hpt: 20 }];
+            ws['!autofilter'] = { ref: `A2:F${items.length + 2}` };
+            return ws;
+        };
+
+        const buildSummarySheet = (bookings, buses) => {
+            const groups = groupByDay(bookings);
+            const busNames = buses.map((b) => b.name);
+            const head = ['Day', 'Bookings', 'Employees', ...busNames, WAITLIST];
+            const lastCol = head.length - 1;
+
+            const titleRow = [`Alorica — Transportation Summary (${bookings.length} bookings)`];
+            while (titleRow.length <= lastCol) titleRow.push('');
+
+            const aoa = [
+                titleRow,
+                ['Generated', new Date().toLocaleString()],
+                [],
+                head
+            ];
+
+            groups.forEach(({ day, items }) => {
+                const counts = {};
+                busNames.forEach((n) => { counts[n] = 0; });
+                let wait = 0;
+                items.forEach((b) => {
+                    if (!b.bus || b.bus === WAITLIST) wait += 1;
+                    else if (counts[b.bus] != null) counts[b.bus] += 1;
+                    else counts[b.bus] = 1;
+                });
+                aoa.push([day, items.length, uniqueEmployeeCount(items), ...busNames.map((n) => counts[n]), wait]);
+            });
+
+            aoa.push([
+                'Total',
+                bookings.length,
+                uniqueEmployeeCount(bookings),
+                ...busNames.map((n) => bookings.filter((b) => b.bus === n).length),
+                bookings.filter((b) => !b.bus || b.bus === WAITLIST).length
+            ]);
+
+            const ws = XLSX.utils.aoa_to_sheet(aoa);
+            ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } }];
+            ws['!cols'] = [{ wch: 18 }, { wch: 11 }, { wch: 11 }, ...busNames.map(() => ({ wch: 12 })), { wch: 11 }];
+
+            const totalRow = aoa.length - 1;
+            for (let r = 0; r <= totalRow; r++) {
+                for (let c = 0; c <= lastCol; c++) {
+                    const addr = XLSX.utils.encode_cell({ r, c });
+                    if (!ws[addr]) continue;
+                    if (r === 0) ws[addr].s = TITLE_STYLE;
+                    else if (r === 3) ws[addr].s = HEADER_STYLE;
+                    else if (r === totalRow) ws[addr].s = TOTAL_STYLE;
+                    else ws[addr].s = BODY_STYLE;
+                }
+            }
+            return ws;
+        };
+
+        const buildWorkbook = (bookings, buses) => {
             const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, buildSummarySheet(bookings, buses), 'Summary');
             groupByDay(bookings).forEach(({ day, items }) => {
-                const rows = items.map((b) => ({
-                    'Employee Name': b.employeeName,
-                    'Employee ID': b.employeeId,
-                    'Booking Time': b.time,
-                    'Pickup Point': b.location,
-                    'Type': b.type,
-                }));
-                const ws = XLSX.utils.json_to_sheet(rows);
-                ws['!cols'] = [{ wch: 26 }, { wch: 16 }, { wch: 15 }, { wch: 34 }, { wch: 12 }];
                 const safeName = String(day).replace(/[^\w-]/g, '-').slice(0, 31) || 'Sheet';
-                XLSX.utils.book_append_sheet(wb, ws, safeName);
+                XLSX.utils.book_append_sheet(wb, buildDaySheet(day, items), safeName);
             });
             return wb;
         };
 
-        // Build a printable HTML report (one section per day)
+        /* =============================================================
+         * 5. Printable report
+         * ============================================================= */
+
         const buildPrintHtml = (bookings) => {
             const groups = groupByDay(bookings);
             const sections = groups.map(({ day, items }) => `
@@ -177,6 +382,7 @@
                                 <th>Booking Time</th>
                                 <th>Pickup Point</th>
                                 <th>Type</th>
+                                <th>Bus</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -188,6 +394,7 @@
                                 <td>${esc(b.time)}</td>
                                 <td>${esc(b.location)}</td>
                                 <td>${esc(b.type)}</td>
+                                <td class="${b.bus === WAITLIST ? 'wait' : ''}">${esc(b.bus || '-')}</td>
                             </tr>`).join('')}
                         </tbody>
                     </table>
@@ -214,6 +421,7 @@
     thead th { background: #e6f0f7; color: #00385F; }
     tbody tr:nth-child(even) { background: #fafafa; }
     td.num, th.num { width: 34px; text-align: center; }
+    td.wait { color: #b91c1c; font-weight: bold; }
     footer { margin-top: 24px; font-size: 11px; color: #9ca3af; text-align: center; }
     @page { margin: 14mm; }
 </style>
@@ -229,7 +437,38 @@
 </html>`;
         };
 
+        /* =============================================================
+         * 6. UI atoms
+         * ============================================================= */
+
+        const Icon = ({ name, size = 24, className = "" }) => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, [name]);
+            return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
+        };
+
+        const Toasts = ({ toasts }) => {
+            const styles = {
+                success: 'bg-green-50 text-green-800 border-green-200',
+                error: 'bg-red-50 text-red-700 border-red-200',
+                info: 'bg-alorica-light text-alorica-blue border-blue-200'
+            };
+            const icons = { success: 'check-circle', error: 'alert-circle', info: 'info' };
+            return (
+                <div className="fixed top-4 right-4 z-[100] space-y-2 w-[min(92vw,22rem)]">
+                    {toasts.map((t) => (
+                        <div key={t.id} className={`toast-in flex items-start gap-2 border rounded-xl shadow-lg px-4 py-3 text-sm font-medium ${styles[t.type] || styles.info}`}>
+                            <Icon name={icons[t.type] || 'info'} size={18} className="mt-0.5 shrink-0" />
+                            <span>{t.text}</span>
+                        </div>
+                    ))}
+                </div>
+            );
+        };
+
         const App = () => {
+            /* ------------------ state ------------------ */
             const [isLoggedIn, setIsLoggedIn] = useState(false);
             const [currentUser, setCurrentUser] = useState(null);
             const [loginData, setLoginData] = useState({ username: '', password: '' });
@@ -237,13 +476,18 @@
             const [locating, setLocating] = useState(false);
             const [activeTab, setActiveTab] = useState('arrival');
             const [now, setNow] = useState(new Date());
-            const [bookings, setBookings] = useState(() => loadBookings());
-            const [customUsers, setCustomUsers] = useState(() => loadCustomUsers());
+            const [bookings, setBookings] = useState(() => loadJSON(STORAGE.bookings, []));
+            const [customUsers, setCustomUsers] = useState(() => loadJSON(STORAGE.users, []));
+            const [buses, setBuses] = useState(() => loadJSON(STORAGE.buses, DEFAULT_BUSES));
             const [adminView, setAdminView] = useState('bookings');
             const [newUser, setNewUser] = useState({ name: '', username: '', password: '' });
+            const [newBus, setNewBus] = useState({ name: '', capacity: '' });
             const [userFeedback, setUserFeedback] = useState({ type: '', text: '' });
-            const [savedMsg, setSavedMsg] = useState('');
+            const [busFeedback, setBusFeedback] = useState({ type: '', text: '' });
             const [sharing, setSharing] = useState(false);
+            const [toasts, setToasts] = useState([]);
+            const [filters, setFilters] = useState({ q: '', from: '', to: '' });
+            const [importing, setImporting] = useState(false);
 
             const [formData, setFormData] = useState({
                 employeeName: '',
@@ -251,109 +495,135 @@
                 dropOffLocation: '',
                 timeZone: '',
                 time: '',
-                date: new Date().toISOString().split('T')[0],
+                date: todayISO()
             });
 
+            /* ------------------ effects ------------------ */
             useEffect(() => {
                 const timer = setInterval(() => setNow(new Date()), 1000);
                 return () => clearInterval(timer);
             }, []);
 
-            // Persist all bookings so the admin can export them later
-            useEffect(() => {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(bookings));
-            }, [bookings]);
+            useEffect(() => { saveJSON(STORAGE.bookings, bookings); }, [bookings]);
+            useEffect(() => { saveJSON(STORAGE.users, customUsers); }, [customUsers]);
+            useEffect(() => { saveJSON(STORAGE.buses, buses); }, [buses]);
 
-            // Persist the users created by the admin
-            useEffect(() => {
-                localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(customUsers));
-            }, [customUsers]);
+            /* ------------------ toasts ------------------ */
+            const pushToast = (text, type = 'info') => {
+                const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                setToasts((prev) => [...prev, { id, text, type }]);
+                setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
+            };
 
+            /* ------------------ auth ------------------ */
             const allUsers = DEFAULT_USERS.concat(customUsers);
 
             const handleLogin = (e) => {
                 e.preventDefault();
                 const user = allUsers.find(
-                    u => u.username === loginData.username && u.password === loginData.password
+                    (u) => u.username === loginData.username.trim() && u.password === loginData.password
                 );
-                
                 if (user) {
                     setIsLoggedIn(true);
                     setCurrentUser(user);
                     setError('');
+                    setLoginData({ username: '', password: '' });
                 } else {
                     setError('Invalid username or password');
                 }
             };
 
+            /* ------------------ booking ------------------ */
             const handleBooking = (e) => {
                 e.preventDefault();
 
-                const booking = {
+                const employeeName = formData.employeeName.trim();
+                const employeeId = formData.employeeId.trim();
+                const type = activeTab === 'arrival' ? 'Arrival' : 'Departure';
+                const time = formData.time || `${clock.hh}:${clock.mm}`;
+                const date = formData.date;
+
+                if (date < todayISO()) {
+                    pushToast('The booking date cannot be in the past.', 'error');
+                    return;
+                }
+
+                const duplicate = bookings.some(
+                    (b) => b.employeeId === employeeId && b.date === date && b.time === time && b.type === type
+                );
+                if (duplicate) {
+                    pushToast('This booking already exists for the same employee, date and time.', 'error');
+                    return;
+                }
+
+                const base = {
                     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                    employeeName: formData.employeeName.trim(),
-                    employeeId: formData.employeeId.trim(),
-                    type: activeTab === 'arrival' ? 'Arrival' : 'Departure',
+                    employeeName,
+                    employeeId,
+                    type,
                     location: formData.dropOffLocation.trim(),
                     timeZone: formData.timeZone,
-                    time: formData.time || `${clock.hh}:${clock.mm}`,
-                    date: formData.date,
+                    time,
+                    date,
                     createdBy: currentUser.username,
-                    bookedAt: new Date().toISOString(),
+                    bookedAt: new Date().toISOString()
                 };
+                const booking = { ...base, bus: assignBus(base, bookings, buses) };
 
                 setBookings((prev) => [...prev, booking]);
-                setSavedMsg(`Booking confirmed for ${booking.employeeName} on ${booking.date} at ${booking.time}.`);
-                setTimeout(() => setSavedMsg(''), 6000);
-                setFormData((prev) => ({
-                    ...prev,
-                    employeeName: '',
-                    employeeId: '',
-                    dropOffLocation: '',
-                    time: '',
-                }));
+                pushToast(`Booking confirmed for ${employeeName} — ${date} at ${time} (${booking.bus}).`, 'success');
+                setFormData((prev) => ({ ...prev, employeeName: '', employeeId: '', dropOffLocation: '', time: '' }));
             };
 
-            const exportFileName = () => `Alorica_Bookings_${new Date().toISOString().split('T')[0]}.xlsx`;
+            /* ------------------ admin: bookings ------------------ */
+            const filteredBookings = useMemo(() => {
+                const q = filters.q.trim().toLowerCase();
+                return bookings.filter((b) => {
+                    const date = b.date || '';
+                    if (filters.from && date < filters.from) return false;
+                    if (filters.to && date > filters.to) return false;
+                    if (!q) return true;
+                    return [b.employeeName, b.employeeId, b.location, b.bus, b.type]
+                        .some((v) => String(v == null ? '' : v).toLowerCase().includes(q));
+                });
+            }, [bookings, filters]);
 
-            // Admin: create a new user account
-            const handleCreateUser = (e) => {
-                e.preventDefault();
-                const name = newUser.name.trim();
-                const username = newUser.username.trim();
-                const password = newUser.password.trim();
+            const dayGroups = useMemo(() => groupByDay(filteredBookings), [filteredBookings]);
+            const busNames = buses.map((b) => b.name);
 
-                if (!name || !username || !password) {
-                    setUserFeedback({ type: 'error', text: 'Please fill in all fields.' });
-                    return;
-                }
-                const taken = allUsers.some(u => u.username.toLowerCase() === username.toLowerCase());
-                if (taken) {
-                    setUserFeedback({ type: 'error', text: `The username "${username}" is already used.` });
-                    return;
-                }
+            const busUsage = useMemo(() => {
+                const map = {};
+                buses.forEach((b) => { map[b.name] = 0; });
+                bookings.forEach((b) => { if (b.bus && map[b.bus] != null) map[b.bus] += 1; });
+                return map;
+            }, [bookings, buses]);
 
-                setCustomUsers((prev) => [...prev, { name, username, password }]);
-                setNewUser({ name: '', username: '', password: '' });
-                setUserFeedback({ type: 'success', text: `User "${username}" was created successfully.` });
+            const waitlistCount = bookings.filter((b) => !b.bus || b.bus === WAITLIST).length;
+
+            const exportFileName = () => {
+                const stamp = (filters.from || filters.to)
+                    ? `${filters.from || 'start'}_to_${filters.to || 'end'}`
+                    : todayISO();
+                return `Alorica_Bookings_${stamp}.xlsx`;
             };
 
-            // 1) Save — build the Excel file (one sheet per day) and download it
+            const buildFilteredWorkbook = () => buildWorkbook(filteredBookings, buses);
+
             const handleSaveExcel = () => {
-                if (!bookings.length) {
-                    alert('There are no bookings to export yet.');
+                if (!filteredBookings.length) {
+                    pushToast('There are no bookings to export for the current filters.', 'error');
                     return;
                 }
-                XLSX.writeFile(buildWorkbook(bookings), exportFileName());
+                XLSX.writeFile(buildFilteredWorkbook(), exportFileName());
+                pushToast(`Exported ${filteredBookings.length} bookings to ${exportFileName()}.`, 'success');
             };
 
-            // 2) Share — send the Excel file to WhatsApp / Telegram / Messenger / Bluetooth...
             const handleShare = async () => {
-                if (!bookings.length) {
-                    alert('There are no bookings to share yet.');
+                if (!filteredBookings.length) {
+                    pushToast('There are no bookings to share for the current filters.', 'error');
                     return;
                 }
-                const wb = buildWorkbook(bookings);
+                const wb = buildFilteredWorkbook();
                 const fileName = exportFileName();
                 const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
                 const file = new File([buffer], fileName, { type: XLSX_MIME });
@@ -364,25 +634,32 @@
                         await navigator.share({
                             files: [file],
                             title: 'Alorica Bookings',
-                            text: 'Alorica employee transportation bookings',
+                            text: 'Alorica employee transportation bookings'
                         });
                     } else {
                         XLSX.writeFile(wb, fileName);
-                        alert('Direct file sharing is not supported on this device. The file has been downloaded instead — you can share it from your downloads via WhatsApp, Telegram, Messenger or Bluetooth.');
+                        pushToast('Direct file sharing is not supported on this device. The file was downloaded instead — share it from Downloads via WhatsApp, Telegram, Messenger or Bluetooth.', 'info');
                     }
                 } catch (err) {
                     if (!err || err.name !== 'AbortError') {
-                        alert('Sharing failed: ' + (err ? err.message : 'unknown error'));
+                        pushToast('Sharing failed: ' + (err ? err.message : 'unknown error'), 'error');
                     }
                 } finally {
                     setSharing(false);
                 }
             };
 
-            // 3) Print — print the report directly (one page per day)
+            const shareSummaryText = () => {
+                const groups = groupByDay(filteredBookings);
+                const lines = [`Alorica — Employee Transportation`, `Bookings: ${filteredBookings.length} | Days: ${groups.length} | Employees: ${uniqueEmployeeCount(filteredBookings)}`];
+                groups.forEach(({ day, items }) => lines.push(`${day}: ${items.length} booking(s)`));
+                if (waitlistCount) lines.push(`Waitlisted: ${waitlistCount}`);
+                return lines.join('\n');
+            };
+
             const handlePrint = () => {
-                if (!bookings.length) {
-                    alert('There are no bookings to print yet.');
+                if (!filteredBookings.length) {
+                    pushToast('There are no bookings to print for the current filters.', 'error');
                     return;
                 }
                 const frame = document.createElement('iframe');
@@ -397,7 +674,7 @@
 
                 const win = frame.contentWindow;
                 win.document.open();
-                win.document.write(buildPrintHtml(bookings));
+                win.document.write(buildPrintHtml(filteredBookings));
                 win.document.close();
 
                 setTimeout(() => {
@@ -407,43 +684,157 @@
                 }, 300);
             };
 
-            const getCurrentLocation = (field) => {
-                if (!navigator.geolocation) {
-                    alert("Geolocation is not supported by your browser");
+            const handleDeleteBooking = (id) => {
+                const target = bookings.find((b) => b.id === id);
+                if (!target) return;
+                if (!window.confirm(`Delete the booking for ${target.employeeName || 'this employee'} on ${target.date}?`)) return;
+                setBookings((prev) => prev.filter((b) => b.id !== id));
+                pushToast('Booking deleted.', 'success');
+            };
+
+            const handleSetBus = (id, busName) => {
+                setBookings((prev) => prev.map((b) => (b.id === id ? { ...b, bus: busName, busManual: true } : b)));
+                pushToast(`Bus updated to ${busName}.`, 'success');
+            };
+
+            const handleRedistribute = () => {
+                if (!bookings.length) {
+                    pushToast('There are no bookings to distribute.', 'error');
+                    return;
+                }
+                setBookings((prev) => redistribute(prev, buses));
+                pushToast('Buses re-distributed automatically (manual assignments kept).', 'success');
+            };
+
+            const resetFilters = () => setFilters({ q: '', from: '', to: '' });
+
+            /* ------------------ admin: buses ------------------ */
+            const handleAddBus = (e) => {
+                e.preventDefault();
+                const name = newBus.name.trim();
+                const capacity = parseInt(newBus.capacity, 10);
+
+                if (!name || !capacity || capacity < 1) {
+                    setBusFeedback({ type: 'error', text: 'Please enter a bus name and a capacity of at least 1.' });
+                    return;
+                }
+                if (buses.some((b) => b.name.toLowerCase() === name.toLowerCase())) {
+                    setBusFeedback({ type: 'error', text: `A bus named "${name}" already exists.` });
                     return;
                 }
 
+                setBuses((prev) => [...prev, { id: `bus-${Date.now()}`, name, capacity }]);
+                setNewBus({ name: '', capacity: '' });
+                setBusFeedback({ type: 'success', text: `Bus "${name}" was added.` });
+            };
+
+            const handleDeleteBus = (id) => {
+                const bus = buses.find((b) => b.id === id);
+                if (!bus) return;
+                if (!window.confirm(`Remove "${bus.name}"? Its bookings will move to "Waitlist".`)) return;
+                setBuses((prev) => prev.filter((b) => b.id !== id));
+                setBookings((prev) => prev.map((b) => (b.bus === bus.name ? { ...b, bus: WAITLIST, busManual: false } : b)));
+                pushToast(`Bus "${bus.name}" removed.`, 'success');
+            };
+
+            const handleUpdateCapacity = (id, capacity) => {
+                const value = parseInt(capacity, 10);
+                if (!value || value < 1) return;
+                setBuses((prev) => prev.map((b) => (b.id === id ? { ...b, capacity: value } : b)));
+            };
+
+            /* ------------------ admin: users ------------------ */
+            const handleCreateUser = (e) => {
+                e.preventDefault();
+                const name = newUser.name.trim();
+                const username = newUser.username.trim();
+                const password = newUser.password.trim();
+
+                if (!name || !username || !password) {
+                    setUserFeedback({ type: 'error', text: 'Please fill in all fields.' });
+                    return;
+                }
+                if (allUsers.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
+                    setUserFeedback({ type: 'error', text: `The username "${username}" is already used.` });
+                    return;
+                }
+
+                setCustomUsers((prev) => [...prev, { name, username, password }]);
+                setNewUser({ name: '', username: '', password: '' });
+                setUserFeedback({ type: 'success', text: `User "${username}" was created successfully.` });
+            };
+
+            /* ------------------ admin: backup ------------------ */
+            const handleExportBackup = () => {
+                const payload = {
+                    exportedAt: new Date().toISOString(),
+                    version: 1,
+                    bookings,
+                    customUsers,
+                    buses
+                };
+                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Alorica_backup_${todayISO()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                pushToast('Backup file downloaded.', 'success');
+            };
+
+            const handleImportBackup = (file) => {
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    try {
+                        const data = JSON.parse(reader.result);
+                        if (Array.isArray(data.bookings)) setBookings(data.bookings);
+                        if (Array.isArray(data.customUsers)) setCustomUsers(data.customUsers);
+                        if (Array.isArray(data.buses) && data.buses.length) setBuses(data.buses);
+                        pushToast('Backup restored successfully.', 'success');
+                    } catch (err) {
+                        pushToast('That file is not a valid Alorica backup.', 'error');
+                    } finally {
+                        setImporting(false);
+                    }
+                };
+                reader.onerror = () => {
+                    pushToast('Could not read the selected file.', 'error');
+                    setImporting(false);
+                };
+                reader.readAsText(file);
+            };
+
+            /* ------------------ geolocation ------------------ */
+            const getCurrentLocation = (field) => {
+                if (!navigator.geolocation) {
+                    pushToast('Geolocation is not supported by your browser.', 'error');
+                    return;
+                }
                 setLocating(true);
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
                         const { latitude, longitude } = position.coords;
-                        const locationStr = `Lat: ${latitude.toFixed(4)}, Lon: ${longitude.toFixed(4)}`;
-                        setFormData(prev => ({ ...prev, [field]: locationStr }));
+                        setFormData((prev) => ({ ...prev, [field]: `Lat: ${latitude.toFixed(4)}, Lon: ${longitude.toFixed(4)}` }));
                         setLocating(false);
+                        pushToast('Current location detected.', 'success');
                     },
-                    (error) => {
-                        let msg = "";
-                        switch(error.code) {
-                            case error.PERMISSION_DENIED:
-                                msg = "Permission denied. Please enable location services.";
-                                break;
-                            case error.POSITION_UNAVAILABLE:
-                                msg = "Location information is unavailable.";
-                                break;
-                            case error.TIMEOUT:
-                                msg = "The request to get user location timed out.";
-                                break;
-                            default:
-                                msg = "An unknown error occurred.";
-                                break;
-                        }
-                        alert("Error: " + msg);
+                    (err) => {
+                        let msg = 'An unknown error occurred.';
+                        if (err.code === err.PERMISSION_DENIED) msg = 'Permission denied. Please enable location services.';
+                        else if (err.code === err.POSITION_UNAVAILABLE) msg = 'Location information is unavailable.';
+                        else if (err.code === err.TIMEOUT) msg = 'The request to get your location timed out.';
+                        pushToast('Location error: ' + msg, 'error');
                         setLocating(false);
                     },
                     { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
                 );
             };
 
+            /* ------------------ derived ------------------ */
             const clock = formatClock(now, getOffsetHours(formData.timeZone));
             const dropOffLabel = activeTab === 'arrival' ? 'Pickup location' : 'Drop off location';
             const dropOffIcon = activeTab === 'arrival' ? 'map-pin' : 'navigation';
@@ -455,141 +846,214 @@
             const [displayHh, displayMm] = displayTime.split(':');
 
             const isAdmin = currentUser && currentUser.username === 'admin';
-            const dayGroups = groupByDay(bookings);
-            const uniqueEmployees = new Set(bookings.map((b) => b.employeeId)).size;
+            const filtersActive = Boolean(filters.q || filters.from || filters.to);
+            const adminTabs = [
+                { key: 'bookings', label: 'Bookings', icon: 'calendar-check' },
+                { key: 'buses', label: 'Buses', icon: 'bus' },
+                { key: 'users', label: 'Users', icon: 'users' }
+            ];
 
+            /* ------------------ login screen ------------------ */
             if (!isLoggedIn) {
                 return (
-                    <div className="min-h-screen flex items-center justify-center p-4">
-                        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in">
-                            <div className="flex flex-col items-center mb-8">
-                                <img src="logo.png" alt="Alorica" className="h-12 mb-4" />
-                                <h1 className="text-2xl font-bold text-alorica-blue">Login</h1>
-                                <p className="text-gray-500 text-sm mt-2 text-center">Alorica Booking System</p>
+                    <>
+                        <Toasts toasts={toasts} />
+                        <div className="min-h-screen flex items-center justify-center p-4">
+                            <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in">
+                                <div className="flex flex-col items-center mb-8">
+                                    <img src="logo.png" alt="Alorica" className="h-12 mb-4" />
+                                    <h1 className="text-2xl font-bold text-alorica-blue">Login</h1>
+                                    <p className="text-gray-500 text-sm mt-2 text-center">Alorica Booking System</p>
+                                </div>
+
+                                <form onSubmit={handleLogin} className="space-y-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                                        <div className="relative">
+                                            <input
+                                                type="text"
+                                                required
+                                                autoComplete="username"
+                                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
+                                                placeholder="Enter your username"
+                                                value={loginData.username}
+                                                onChange={(e) => setLoginData({ ...loginData, username: e.target.value })}
+                                            />
+                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                                <Icon name="user" size={18} />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                                        <div className="relative">
+                                            <input
+                                                type="password"
+                                                required
+                                                autoComplete="current-password"
+                                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
+                                                placeholder="Enter your password"
+                                                value={loginData.password}
+                                                onChange={(e) => setLoginData({ ...loginData, password: e.target.value })}
+                                            />
+                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                                <Icon name="lock" size={18} />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {error && (
+                                        <p className="text-red-500 text-sm text-center font-medium bg-red-50 py-2 rounded-lg">{error}</p>
+                                    )}
+
+                                    <button
+                                        type="submit"
+                                        className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all"
+                                    >
+                                        Login
+                                        <Icon name="chevron-right" size={20} />
+                                    </button>
+                                </form>
                             </div>
-
-                            <form onSubmit={handleLogin} className="space-y-6">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                                    <div className="relative">
-                                        <input
-                                            type="text"
-                                            required
-                                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
-                                            placeholder="Enter your username"
-                                            value={loginData.username}
-                                            onChange={(e) => setLoginData({...loginData, username: e.target.value})}
-                                        />
-                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                                            <Icon name="user" size={18} />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                                    <div className="relative">
-                                        <input
-                                            type="password"
-                                            required
-                                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
-                                            placeholder="Enter your password"
-                                            value={loginData.password}
-                                            onChange={(e) => setLoginData({...loginData, password: e.target.value})}
-                                        />
-                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                                            <Icon name="lock" size={18} />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {error && (
-                                    <p className="text-red-500 text-sm text-center font-medium bg-red-50 py-2 rounded-lg">{error}</p>
-                                )}
-
-                                <button
-                                    type="submit"
-                                    className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all"
-                                >
-                                    Login
-                                    <Icon name="chevron-right" size={20} />
-                                </button>
-                            </form>
                         </div>
-                    </div>
+                    </>
                 );
             }
 
+            /* ------------------ main app ------------------ */
             return (
+                <>
+                <Toasts toasts={toasts} />
                 <div className="min-h-screen bg-alorica-light">
-                    <nav className="bg-white shadow-md px-6 py-4 flex justify-between items-center sticky top-0 z-50">
+                    <nav className="bg-white shadow-md px-4 sm:px-6 py-4 flex justify-between items-center sticky top-0 z-50">
                         <img src="logo.png" alt="Alorica" className="h-8" />
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-3 sm:gap-4">
                             <div className="text-right">
                                 <p className="text-sm font-bold text-alorica-blue">{currentUser.name}</p>
-                                <p className="text-xs text-gray-500">Welcome back</p>
+                                <p className="text-xs text-gray-500">{isAdmin ? 'Administrator' : 'Welcome back'}</p>
                             </div>
-                            <button 
-                                onClick={() => setIsLoggedIn(false)}
+                            <button
+                                onClick={() => { setIsLoggedIn(false); setCurrentUser(null); }}
                                 className="p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
+                                title="Sign out"
                             >
                                 <Icon name="log-out" size={24} />
                             </button>
                         </div>
                     </nav>
 
-                    <main className={`${isAdmin ? 'max-w-5xl' : 'max-w-4xl'} mx-auto p-6 mt-8 fade-in`}>
+                    <main className={`${isAdmin ? 'max-w-6xl' : 'max-w-4xl'} mx-auto p-4 sm:p-6 mt-6 sm:mt-8 fade-in`}>
                         {isAdmin ? (
                         <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-white">
-                            <div className="bg-alorica-blue p-8 text-white text-center">
-                                <h2 className="text-3xl font-bold mb-2">Admin Dashboard</h2>
-                                <p className="opacity-80">Manage employee bookings and user accounts</p>
+                            <div className="bg-alorica-blue p-6 sm:p-8 text-white text-center">
+                                <h2 className="text-2xl sm:text-3xl font-bold mb-2">Admin Dashboard</h2>
+                                <p className="opacity-80">Manage employee bookings, the bus fleet and user accounts</p>
                             </div>
 
-                            <div className="flex justify-center gap-3 pt-6 px-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setAdminView('bookings')}
-                                    className={`flex items-center gap-2 px-6 sm:px-10 py-3 rounded-xl font-bold text-sm sm:text-base transition-all ${
-                                        adminView === 'bookings'
-                                            ? 'bg-alorica-orange text-white shadow-lg scale-105'
-                                            : 'bg-gray-100 text-alorica-blue hover:bg-alorica-light'
-                                    }`}
-                                >
-                                    <Icon name="calendar-check" size={18} /> Bookings
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setAdminView('users')}
-                                    className={`flex items-center gap-2 px-6 sm:px-10 py-3 rounded-xl font-bold text-sm sm:text-base transition-all ${
-                                        adminView === 'users'
-                                            ? 'bg-alorica-orange text-white shadow-lg scale-105'
-                                            : 'bg-gray-100 text-alorica-blue hover:bg-alorica-light'
-                                    }`}
-                                >
-                                    <Icon name="users" size={18} /> Users
-                                </button>
+                            <div className="flex flex-wrap justify-center gap-3 pt-6 px-4">
+                                {adminTabs.map((tab) => (
+                                    <button
+                                        key={tab.key}
+                                        type="button"
+                                        onClick={() => setAdminView(tab.key)}
+                                        className={`flex items-center gap-2 px-5 sm:px-8 py-3 rounded-xl font-bold text-sm sm:text-base transition-all ${
+                                            adminView === tab.key
+                                                ? 'bg-alorica-orange text-white shadow-lg scale-105'
+                                                : 'bg-gray-100 text-alorica-blue hover:bg-alorica-light'
+                                        }`}
+                                    >
+                                        <Icon name={tab.icon} size={18} /> {tab.label}
+                                    </button>
+                                ))}
                             </div>
 
                             <div className="p-4 sm:p-8">
-                                {adminView === 'bookings' ? (
+
+                            {/* ================= BOOKINGS ================= */}
+                            {adminView === 'bookings' && (
                                 <>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8 max-w-3xl mx-auto">
+                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 max-w-4xl mx-auto">
                                     <div className="bg-alorica-light rounded-2xl p-4 text-center">
-                                        <p className="text-3xl font-black text-alorica-blue">{bookings.length}</p>
-                                        <p className="text-xs text-gray-500 mt-1">Total Bookings</p>
+                                        <p className="text-3xl font-black text-alorica-blue">{filteredBookings.length}</p>
+                                        <p className="text-xs text-gray-500 mt-1">Bookings</p>
                                     </div>
                                     <div className="bg-alorica-light rounded-2xl p-4 text-center">
                                         <p className="text-3xl font-black text-alorica-blue">{dayGroups.length}</p>
                                         <p className="text-xs text-gray-500 mt-1">Days</p>
                                     </div>
-                                    <div className="bg-alorica-light rounded-2xl p-4 text-center col-span-2 sm:col-span-1">
-                                        <p className="text-3xl font-black text-alorica-blue">{uniqueEmployees}</p>
+                                    <div className="bg-alorica-light rounded-2xl p-4 text-center">
+                                        <p className="text-3xl font-black text-alorica-blue">{uniqueEmployeeCount(filteredBookings)}</p>
                                         <p className="text-xs text-gray-500 mt-1">Employees</p>
+                                    </div>
+                                    <div className="bg-alorica-light rounded-2xl p-4 text-center">
+                                        <p className={`text-3xl font-black ${waitlistCount ? 'text-red-600' : 'text-alorica-blue'}`}>{waitlistCount}</p>
+                                        <p className="text-xs text-gray-500 mt-1">On waitlist</p>
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 max-w-3xl mx-auto">
+                                {/* Filters */}
+                                <div className="max-w-4xl mx-auto mb-6 bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                                        <div className="sm:col-span-2">
+                                            <label className="block text-xs font-semibold text-gray-600 mb-1">Search</label>
+                                            <div className="relative">
+                                                <input
+                                                    className="w-full px-4 py-3 pl-10 border-2 border-gray-100 rounded-xl outline-none bg-white text-sm"
+                                                    placeholder="Name, ID, point, bus..."
+                                                    value={filters.q}
+                                                    onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+                                                />
+                                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                                    <Icon name="search" size={16} />
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-600 mb-1">From date</label>
+                                            <input
+                                                type="date"
+                                                className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-white text-sm"
+                                                value={filters.from}
+                                                onChange={(e) => setFilters({ ...filters, from: e.target.value })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-600 mb-1">To date</label>
+                                            <input
+                                                type="date"
+                                                className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-white text-sm"
+                                                value={filters.to}
+                                                onChange={(e) => setFilters({ ...filters, to: e.target.value })}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+                                        <p className="text-xs text-gray-500">
+                                            Showing <span className="font-bold text-alorica-blue">{filteredBookings.length}</span> of {bookings.length} bookings{filtersActive ? ' (filters applied)' : ''}. Exports use this selection.
+                                        </p>
+                                        <div className="flex gap-2">
+                                            {filtersActive && (
+                                                <button
+                                                    type="button"
+                                                    onClick={resetFilters}
+                                                    className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors"
+                                                >
+                                                    Clear filters
+                                                </button>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={handleRedistribute}
+                                                className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
+                                            >
+                                                <Icon name="shuffle" size={14} /> Auto-assign buses
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 max-w-4xl mx-auto">
                                     <button
                                         type="button"
                                         onClick={handleSaveExcel}
@@ -613,12 +1077,45 @@
                                         <Icon name="printer" size={20} /> Print
                                     </button>
                                 </div>
-                                <p className="text-center text-xs text-gray-400 mb-8 -mt-4">
-                                    The Excel file contains one sheet per day, with employee name, ID, booking time and pickup point.
+
+                                <div className="flex flex-wrap justify-center gap-2 mb-4">
+                                    <a
+                                        href={`https://wa.me/?text=${encodeURIComponent(shareSummaryText())}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors flex items-center gap-1"
+                                    >
+                                        <Icon name="message-circle" size={14} /> WhatsApp summary
+                                    </a>
+                                    <a
+                                        href={`https://t.me/share/url?url=${encodeURIComponent('https://github.com/mhgd74/Alorica')}&text=${encodeURIComponent(shareSummaryText())}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors flex items-center gap-1"
+                                    >
+                                        <Icon name="send" size={14} /> Telegram summary
+                                    </a>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(shareSummaryText())
+                                                .then(() => pushToast('Summary copied to clipboard.', 'success'))
+                                                .catch(() => pushToast('Could not access the clipboard.', 'error'));
+                                        }}
+                                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors flex items-center gap-1"
+                                    >
+                                        <Icon name="clipboard-copy" size={14} /> Copy summary
+                                    </button>
+                                </div>
+
+                                <p className="text-center text-xs text-gray-400 mb-8">
+                                    The Excel file contains a Summary sheet plus one sheet per day with employee name, ID, booking time, pickup point, type and assigned bus.
                                 </p>
 
-                                {bookings.length === 0 ? (
-                                    <p className="text-center text-gray-400 py-12">No bookings yet. Employee bookings will appear here.</p>
+                                {filteredBookings.length === 0 ? (
+                                    <p className="text-center text-gray-400 py-12">
+                                        {bookings.length === 0 ? 'No bookings yet. Employee bookings will appear here.' : 'No bookings match the current filters.'}
+                                    </p>
                                 ) : (
                                     <div className="space-y-8">
                                         {dayGroups.map(({ day, items }) => (
@@ -628,27 +1125,49 @@
                                                     <span className="text-xs opacity-80">{items.length} booking{items.length === 1 ? '' : 's'}</span>
                                                 </div>
                                                 <div className="overflow-x-auto">
-                                                    <table className="w-full text-sm">
+                                                    <table className="w-full text-sm min-w-[820px]">
                                                         <thead className="bg-alorica-light text-alorica-blue">
                                                             <tr>
-                                                                <th className="text-left px-4 py-2 font-semibold">Employee Name</th>
-                                                                <th className="text-left px-4 py-2 font-semibold">Employee ID</th>
-                                                                <th className="text-left px-4 py-2 font-semibold">Booking Time</th>
-                                                                <th className="text-left px-4 py-2 font-semibold">Pickup Point</th>
-                                                                <th className="text-left px-4 py-2 font-semibold">Type</th>
+                                                                <th className="text-left px-3 py-2 font-semibold">Employee Name</th>
+                                                                <th className="text-left px-3 py-2 font-semibold">ID</th>
+                                                                <th className="text-left px-3 py-2 font-semibold">Time</th>
+                                                                <th className="text-left px-3 py-2 font-semibold">Pickup Point</th>
+                                                                <th className="text-left px-3 py-2 font-semibold">Type</th>
+                                                                <th className="text-left px-3 py-2 font-semibold">Bus</th>
+                                                                <th className="text-center px-3 py-2 font-semibold">Actions</th>
                                                             </tr>
                                                         </thead>
                                                         <tbody>
                                                             {items.map((b) => (
                                                                 <tr key={b.id} className="border-t border-gray-100">
-                                                                    <td className="px-4 py-2 text-gray-800">{b.employeeName}</td>
-                                                                    <td className="px-4 py-2 text-gray-600">{b.employeeId}</td>
-                                                                    <td className="px-4 py-2 text-gray-600">{b.time}</td>
-                                                                    <td className="px-4 py-2 text-gray-600">{b.location}</td>
-                                                                    <td className="px-4 py-2">
+                                                                    <td className="px-3 py-2 text-gray-800">{b.employeeName}</td>
+                                                                    <td className="px-3 py-2 text-gray-600">{b.employeeId}</td>
+                                                                    <td className="px-3 py-2 text-gray-600">{b.time}</td>
+                                                                    <td className="px-3 py-2 text-gray-600">{b.location}</td>
+                                                                    <td className="px-3 py-2">
                                                                         <span className={`text-xs font-semibold px-2 py-1 rounded-full ${b.type === 'Arrival' ? 'bg-green-50 text-green-700' : 'bg-orange-50 text-alorica-orange'}`}>
                                                                             {b.type}
                                                                         </span>
+                                                                    </td>
+                                                                    <td className="px-3 py-2">
+                                                                        <select
+                                                                            value={b.bus || WAITLIST}
+                                                                            onChange={(e) => handleSetBus(b.id, e.target.value)}
+                                                                            className={`text-xs font-semibold rounded-lg px-2 py-1 border outline-none ${b.bus === WAITLIST ? 'border-red-200 text-red-600 bg-red-50' : 'border-gray-200 text-alorica-blue bg-white'}`}
+                                                                        >
+                                                                            {busNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                                                                            <option value={WAITLIST}>{WAITLIST}</option>
+                                                                        </select>
+                                                                    </td>
+                                                                    <td className="px-3 py-2 text-center">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => handleDeleteBooking(b.id)}
+                                                                            className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
+                                                                            title="Delete booking"
+                                                                        >
+                                                                            <Icon name="trash-2" size={16} />
+                                                                        </button>
                                                                     </td>
                                                                 </tr>
                                                             ))}
@@ -660,7 +1179,134 @@
                                     </div>
                                 )}
                                 </>
-                                ) : (
+                            )}
+
+                            {/* ================= BUSES ================= */}
+                            {adminView === 'buses' && (
+                                <div className="max-w-4xl mx-auto">
+                                    <div className="bg-alorica-light rounded-2xl p-6 mb-8">
+                                        <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-4">
+                                            <Icon name="bus" size={20} className="text-alorica-orange" /> Add a Bus
+                                        </h3>
+                                        <form onSubmit={handleAddBus} className="space-y-4">
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                                <div className="sm:col-span-2">
+                                                    <label className="block text-xs font-semibold text-gray-600 mb-1">Bus name</label>
+                                                    <input
+                                                        required
+                                                        placeholder="e.g. Bus 4"
+                                                        className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-white text-sm"
+                                                        value={newBus.name}
+                                                        onChange={(e) => { setBusFeedback({ type: '', text: '' }); setNewBus({ ...newBus, name: e.target.value }); }}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-semibold text-gray-600 mb-1">Seats (per day)</label>
+                                                    <input
+                                                        required
+                                                        type="number"
+                                                        min="1"
+                                                        placeholder="e.g. 14"
+                                                        className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-white text-sm"
+                                                        value={newBus.capacity}
+                                                        onChange={(e) => { setBusFeedback({ type: '', text: '' }); setNewBus({ ...newBus, capacity: e.target.value }); }}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            {busFeedback.text && (
+                                                <p className={`text-sm font-medium rounded-xl px-4 py-3 border fade-in ${
+                                                    busFeedback.type === 'error'
+                                                        ? 'bg-red-50 text-red-600 border-red-100'
+                                                        : 'bg-green-50 text-green-700 border-green-100'
+                                                }`}>
+                                                    {busFeedback.text}
+                                                </p>
+                                            )}
+
+                                            <button
+                                                type="submit"
+                                                className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-4 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all"
+                                            >
+                                                <Icon name="plus" size={20} /> Add Bus
+                                            </button>
+                                        </form>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                                        <h3 className="text-alorica-blue font-bold text-lg">Fleet ({buses.length} buses)</h3>
+                                        <button
+                                            type="button"
+                                            onClick={handleRedistribute}
+                                            className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
+                                        >
+                                            <Icon name="shuffle" size={14} /> Auto-assign buses
+                                        </button>
+                                    </div>
+
+                                    <div className="border border-gray-100 rounded-2xl overflow-hidden">
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-alorica-light text-alorica-blue">
+                                                    <tr>
+                                                        <th className="text-left px-4 py-2 font-semibold">Bus</th>
+                                                        <th className="text-left px-4 py-2 font-semibold">Seats / day</th>
+                                                        <th className="text-left px-4 py-2 font-semibold">Assigned (all bookings)</th>
+                                                        <th className="text-center px-4 py-2 font-semibold">Remove</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {buses.length === 0 && (
+                                                        <tr><td colSpan="4" className="px-4 py-6 text-center text-gray-400">No buses yet. Add one above.</td></tr>
+                                                    )}
+                                                    {buses.map((bus) => (
+                                                        <tr key={bus.id} className="border-t border-gray-100">
+                                                            <td className="px-4 py-2 text-gray-800 font-semibold">{bus.name}</td>
+                                                            <td className="px-4 py-2">
+                                                                <input
+                                                                    type="number"
+                                                                    min="1"
+                                                                    defaultValue={bus.capacity}
+                                                                    onBlur={(e) => handleUpdateCapacity(bus.id, e.target.value)}
+                                                                    className="w-24 px-3 py-2 border-2 border-gray-100 rounded-lg outline-none bg-white text-sm"
+                                                                />
+                                                            </td>
+                                                            <td className="px-4 py-2 text-gray-600">{busUsage[bus.name] || 0}</td>
+                                                            <td className="px-4 py-2 text-center">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleDeleteBus(bus.id)}
+                                                                    className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
+                                                                    title="Remove bus"
+                                                                >
+                                                                    <Icon name="trash-2" size={16} />
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div className="bg-alorica-light rounded-2xl p-4 text-center">
+                                            <p className="text-2xl font-black text-alorica-blue">{buses.reduce((sum, b) => sum + b.capacity, 0)}</p>
+                                            <p className="text-xs text-gray-500 mt-1">Total seats per day</p>
+                                        </div>
+                                        <div className="bg-alorica-light rounded-2xl p-4 text-center">
+                                            <p className={`text-2xl font-black ${waitlistCount ? 'text-red-600' : 'text-alorica-blue'}`}>{waitlistCount}</p>
+                                            <p className="text-xs text-gray-500 mt-1">Bookings on waitlist</p>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-4 text-center">
+                                        Capacity is applied per day. Bookings that do not fit any bus are placed on the waitlist and flagged in red.
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* ================= USERS ================= */}
+                            {adminView === 'users' && (
                                 <div className="max-w-3xl mx-auto">
                                     <div className="bg-alorica-light rounded-2xl p-6 mb-8">
                                         <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-4">
@@ -749,18 +1395,52 @@
                                     <p className="text-xs text-gray-400 mt-4 text-center">
                                         New users are created with a regular (non-admin) role and are saved in this browser.
                                     </p>
+
+                                    <div className="mt-10 bg-gray-50 border border-gray-100 rounded-2xl p-6">
+                                        <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
+                                            <Icon name="database" size={20} className="text-alorica-orange" /> Data Backup &amp; Restore
+                                        </h3>
+                                        <p className="text-xs text-gray-500 mb-4">
+                                            Download a JSON file with all bookings, buses and user accounts — or restore a previous backup.
+                                        </p>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={handleExportBackup}
+                                                className="bg-white border-2 border-alorica-blue text-alorica-blue font-bold py-3 px-4 rounded-xl hover:bg-alorica-light flex items-center justify-center gap-2 transition-all"
+                                            >
+                                                <Icon name="download" size={18} /> Export backup
+                                            </button>
+                                            <label className={`bg-white border-2 border-gray-200 text-gray-700 font-bold py-3 px-4 rounded-xl cursor-pointer hover:bg-gray-100 flex items-center justify-center gap-2 transition-all ${importing ? 'opacity-70 cursor-wait' : ''}`}>
+                                                <Icon name="upload" size={18} /> {importing ? 'Restoring...' : 'Restore backup'}
+                                                <input
+                                                    type="file"
+                                                    accept="application/json,.json"
+                                                    className="hidden"
+                                                    onChange={(e) => {
+                                                        const file = e.target.files && e.target.files[0];
+                                                        e.target.value = '';
+                                                        if (!file) return;
+                                                        setImporting(true);
+                                                        handleImportBackup(file);
+                                                    }}
+                                                />
+                                            </label>
+                                        </div>
+                                    </div>
                                 </div>
-                                )}
+                            )}
+
                             </div>
                         </div>
                         ) : (
+                        /* ================= REGULAR USER ================= */
                         <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-white">
-                            <div className="bg-alorica-blue p-8 text-white text-center">
-                                <h2 className="text-3xl font-bold mb-2">Transportation</h2>
+                            <div className="bg-alorica-blue p-6 sm:p-8 text-white text-center">
+                                <h2 className="text-2xl sm:text-3xl font-bold mb-2">Transportation</h2>
                                 <p className="opacity-80">Select Arrival or Departure to complete your booking</p>
                             </div>
 
-                            {/* Arrival / Departure Tabs */}
                             <div className="flex justify-center gap-3 sm:gap-4 pt-6 px-4">
                                 <button
                                     type="button"
@@ -788,14 +1468,6 @@
 
                             <form key={activeTab} onSubmit={handleBooking} className="p-4 sm:p-8 fade-in">
                                 <div className="max-w-2xl mx-auto space-y-6">
-                                    {savedMsg && (
-                                        <div className="flex items-start gap-2 bg-green-50 text-green-700 border border-green-100 rounded-xl px-4 py-3 text-sm font-medium fade-in">
-                                            <Icon name="check" size={18} className="mt-0.5 shrink-0" />
-                                            <span>{savedMsg}</span>
-                                        </div>
-                                    )}
-
-                                    {/* Employee details */}
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         <div>
                                             <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2">
@@ -823,12 +1495,11 @@
                                         </div>
                                     </div>
 
-                                    {/* Pickup (Arrival) / Drop off (Departure) location Field */}
                                     <div>
                                         <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
                                             <span className="flex items-center gap-2"><Icon name={dropOffIcon} size={18} className="text-alorica-orange" /> {dropOffLabel}</span>
-                                            <button 
-                                                type="button" 
+                                            <button
+                                                type="button"
                                                 onClick={() => getCurrentLocation('dropOffLocation')}
                                                 className="text-[10px] sm:text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1 shrink-0"
                                             >
@@ -841,11 +1512,10 @@
                                             placeholder={`Select or enter ${dropOffLabel.toLowerCase()}`}
                                             className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm sm:text-base"
                                             value={formData.dropOffLocation}
-                                            onChange={(e) => setFormData({...formData, dropOffLocation: e.target.value})}
+                                            onChange={(e) => setFormData({ ...formData, dropOffLocation: e.target.value })}
                                         />
                                     </div>
 
-                                    {/* Pickup / Drop-off time picker (clock) */}
                                     <div>
                                         <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2">
                                             <Icon name="clock" size={18} className="text-alorica-orange" /> {timeLabel}
@@ -893,13 +1563,12 @@
                                                     required
                                                     className="flex-1 min-w-0 px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-white"
                                                     value={formData.timeZone}
-                                                    onChange={(e) => setFormData({...formData, timeZone: e.target.value})}
+                                                    onChange={(e) => setFormData({ ...formData, timeZone: e.target.value })}
                                                 >
                                                     <option value="">Select timezone</option>
-                                                    <option value="GMT+2">Cairo (GMT+2)</option>
-                                                    <option value="GMT">London (GMT)</option>
-                                                    <option value="GMT-5">New York (GMT-5)</option>
-                                                    <option value="GMT+4">Dubai (GMT+4)</option>
+                                                    {TIMEZONES.map((tz) => (
+                                                        <option key={tz.value} value={tz.value}>{tz.label}</option>
+                                                    ))}
                                                 </select>
                                             </div>
                                         </div>
@@ -909,12 +1578,13 @@
                                         <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2">
                                             <Icon name="calendar" size={18} className="text-alorica-orange" /> Calendar
                                         </label>
-                                        <input 
-                                            type="date" 
+                                        <input
+                                            type="date"
                                             required
+                                            min={todayISO()}
                                             className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50"
                                             value={formData.date}
-                                            onChange={(e) => setFormData({...formData, date: e.target.value})}
+                                            onChange={(e) => setFormData({ ...formData, date: e.target.value })}
                                         />
                                     </div>
 
@@ -944,11 +1614,21 @@
                         <p>© 2026 Alorica Inc. All Rights Reserved.</p>
                     </footer>
                 </div>
+                </>
             );
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
+    </script>
+
+    <script>
+        // Enable offline use (requires http/https, ignored on file://)
+        if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('sw.js').catch(function () {});
+            });
+        }
     </script>
 </body>
 </html>
