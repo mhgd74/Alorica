@@ -1,0 +1,9 @@
+node_modules/
+.DS_Store
+dist/
+*.xlsx
+.env
+
+# Internal company documents — must not be published
+Alorica-Transport-System-Integration-Requirements.docx
+Alorica-Transport-System-Integration-Requirements.pdf

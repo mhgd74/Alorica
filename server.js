@@ -16,7 +16,6 @@ const MIME = {
 };
 
 const server = http.createServer((req, res) => {
-    console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
     let urlPath = decodeURIComponent(req.url.split('?')[0]);
     if (urlPath === '/') {
         res.writeHead(302, { Location: '/index.html', 'Cache-Control': 'no-store' });
