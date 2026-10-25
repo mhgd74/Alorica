@@ -1,5 +1,5 @@
 /* Alorica Booking System — offline cache */
-const CACHE = 'alorica-v1';
+const CACHE = 'alorica-v2';
 
 const ASSETS = [
     './',
@@ -36,6 +36,9 @@ self.addEventListener('fetch', (event) => {
 
     const url = new URL(request.url);
     if (url.origin !== self.location.origin) return; // fonts / external CDNs pass through
+
+    // Live data must never be cached, or the app would keep reading a stale revision.
+    if (url.pathname.startsWith('/api/')) return;
 
     // Network-first for the page itself so an update is never served stale.
     const isPage = request.mode === 'navigate' || url.pathname.endsWith('.html') || url.pathname === '/';

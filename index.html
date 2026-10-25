@@ -112,8 +112,38 @@
             bookings: 'alorica_bookings',
             users: 'alorica_custom_users',
             removedUsers: 'alorica_removed_users',
-            buses: 'alorica_buses'
+            passwordRequests: 'alorica_password_requests',
+            changeRequests: 'alorica_change_requests',
+            notifications: 'alorica_notifications',
+            buses: 'alorica_buses',
+            audit: 'alorica_audit_log',
+            sheet: 'alorica_sheet_state'
         };
+
+        // Storage key -> collection name, so a queued change knows where it belongs.
+        const COLLECTION_BY_KEY = Object.keys(STORAGE).reduce((acc, name) => {
+            acc[STORAGE[name]] = name;
+            return acc;
+        }, {});
+
+        // How long a team leader's change request waits for the employee.
+        const CHANGE_REQUEST_TTL = 48 * 60 * 60 * 1000;
+
+        // A temporary password stays valid for one day before the account must ask again.
+        const TEMP_PASSWORD_TTL = 24 * 60 * 60 * 1000;
+
+        // The sheet moves draft -> sent -> locked. Locking is what stops the team
+        // leader from replacing the sheet the admin has already printed and used
+        // to order buses from the vendor.
+        const SHEET_STATUS = {
+            draft: { label: 'Draft', cls: 'bg-gray-100 text-gray-600' },
+            sent: { label: 'Sent to admin', cls: 'bg-blue-50 text-alorica-blue' },
+            locked: { label: 'Locked after printing', cls: 'bg-green-50 text-green-700' }
+        };
+
+        // The sheet is a one-record collection so it travels over the same sync
+        // channel as everything else.
+        const freshSheet = () => [{ id: 'sheet', status: 'draft', updatedAt: null, updatedBy: '' }];
 
         const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -130,6 +160,31 @@
             return user.username === 'admin' ? 'admin' : 'user';
         };
 
+        /* =============================================================
+         * 2a. Shared state (local cache + Node/SQLite server)
+         * =============================================================
+         * localStorage keeps the UI instant, while every change is also
+         * replicated to the server so several devices share the same data.
+         * Only the real differences are sent, so nothing gets overwritten
+         * by a device that was slow to update.
+         */
+
+        const SYNC = {
+            rev: 0,
+            cache: {},
+            pending: new Map(),
+            timer: null,
+            flushing: false,
+            online: true,
+            listeners: new Set()
+        };
+
+        const syncKeyOf = (item) => (item && typeof item === 'object'
+            ? String(item.id != null ? item.id : item.username)
+            : String(item));
+
+        const syncEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
         const loadJSON = (key, fallback) => {
             try {
                 const raw = localStorage.getItem(key);
@@ -139,11 +194,121 @@
             }
         };
 
+        const syncSetOnline = (online) => {
+            if (SYNC.online === online) return;
+            SYNC.online = online;
+            SYNC.listeners.forEach((fn) => fn(online));
+        };
+
+        // Added / changed / removed items between two versions of a collection.
+        const syncDiff = (before, after) => {
+            const prevMap = new Map((before || []).map((item) => [syncKeyOf(item), item]));
+            const nextMap = new Map((after || []).map((item) => [syncKeyOf(item), item]));
+            const upsert = [];
+            const remove = [];
+            nextMap.forEach((value, id) => {
+                const old = prevMap.get(id);
+                if (!old || !syncEqual(old, value)) upsert.push(value);
+            });
+            prevMap.forEach((_, id) => { if (!nextMap.has(id)) remove.push(id); });
+            return { upsert, remove };
+        };
+
+        const syncRequeue = (key, diff) => {
+            const queued = SYNC.pending.get(key) || { upsert: new Map(), remove: new Set() };
+            diff.upsert.forEach((item) => {
+                const id = syncKeyOf(item);
+                queued.upsert.set(id, item);
+                queued.remove.delete(id);
+            });
+            diff.remove.forEach((id) => {
+                queued.remove.add(id);
+                queued.upsert.delete(id);
+            });
+            SYNC.pending.set(key, queued);
+        };
+
+        const syncSchedule = () => {
+            if (SYNC.timer) return;
+            // A short delay batches the burst of state updates one action causes.
+            SYNC.timer = setTimeout(() => {
+                SYNC.timer = null;
+                syncFlush();
+            }, 300);
+        };
+
+        const syncTakeOps = () => {
+            const ops = [];
+            SYNC.pending.forEach((queued, key) => {
+                const name = COLLECTION_BY_KEY[key];
+                if (!name) return;
+                ops.push({
+                    collection: name,
+                    upsert: [...queued.upsert.values()],
+                    remove: [...queued.remove]
+                });
+            });
+            SYNC.pending.clear();
+            return ops;
+        };
+
+        const syncPost = async (ops) => {
+            const res = await fetch('/api/ops', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops })
+            });
+            if (!res.ok) throw new Error(`sync failed (${res.status})`);
+            return res.json();
+        };
+
+        const syncFlush = async () => {
+            if (SYNC.flushing || SYNC.pending.size === 0) return;
+            SYNC.flushing = true;
+            const ops = syncTakeOps();
+            try {
+                const { rev } = await syncPost(ops);
+                SYNC.rev = rev;
+                syncSetOnline(true);
+            } catch (err) {
+                // Nothing is lost — the batch goes back in the queue.
+                ops.forEach((op) => syncRequeue(STORAGE[op.collection], { upsert: op.upsert, remove: op.remove }));
+                SYNC.pending = new Map([...SYNC.pending].filter(([, q]) => q.upsert.size || q.remove.size));
+                syncSetOnline(false);
+            } finally {
+                SYNC.flushing = false;
+            }
+        };
+
+        // Used when the server is the one that changed: the cache is updated
+        // first so the save effects below see no difference and stay quiet.
+        const syncApplyRemote = (collections) => {
+            const touched = {};
+            Object.keys(STORAGE).forEach((name) => {
+                if (!(name in collections)) return;
+                const value = collections[name] || [];
+                SYNC.cache[STORAGE[name]] = value;
+                try {
+                    localStorage.setItem(STORAGE[name], JSON.stringify(value));
+                } catch (e) {
+                    /* storage unavailable */
+                }
+                touched[name] = value;
+            });
+            return touched;
+        };
+
         const saveJSON = (key, value) => {
             try {
                 localStorage.setItem(key, JSON.stringify(value));
             } catch (e) {
                 /* storage full or unavailable */
+            }
+            const diff = syncDiff(SYNC.cache[key], value);
+            SYNC.cache[key] = value;
+            if (diff.upsert.length || diff.remove.length) {
+                syncRequeue(key, diff);
+                syncSchedule();
             }
         };
 
@@ -173,6 +338,14 @@
             const bytes = new Uint8Array(16);
             crypto.getRandomValues(bytes);
             return toHex(bytes);
+        };
+
+        // Human-friendly temporary password (no look-alike characters).
+        const generateTempPassword = () => {
+            const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+            const bytes = new Uint8Array(10);
+            crypto.getRandomValues(bytes);
+            return Array.from(bytes).map((b) => alphabet[b % alphabet.length]).join('');
         };
 
         const derivePasswordHash = async (password, saltHex) => {
@@ -226,6 +399,22 @@
             const { hh, mm, ampm } = to12h(t24);
             return hh ? `${hh}:${mm} ${ampm}` : '';
         };
+
+        // One rule covers every self-service change an employee makes to their own
+        // booking — editing it or cancelling it. With a full hour still to go they
+        // act directly; any closer and the team leader has to release the change.
+        const EDIT_CUTOFF_MS = 60 * 60 * 1000;
+        const bookingStart = (b) => new Date(`${b.date}T${b.time || '00:00'}`);
+        const canEditBooking = (b) => bookingStart(b).getTime() - Date.now() >= EDIT_CUTOFF_MS;
+
+        // A change is only applied outright when both the booking as it stands and
+        // the values being written are outside the cutoff.
+        const needsLeaderApproval = (booking, next) => !canEditBooking(booking)
+            || Boolean(next && next.time && !canEditBooking(next));
+
+        // A requested change is stored with raw values so it can be applied
+        // directly; times are only prettified when they are shown.
+        const changeValue = (c, value) => (c.field === 'time' ? (formatTime12h(value) || '—') : (value || '—'));
 
         // Preset loading times per direction, grouped by shift.
         // Edit these values to match the official company shift schedule.
@@ -571,7 +760,7 @@
          * 7. Screens
          * ============================================================= */
 
-        const Login = ({ toasts, loginData, setLoginData, error, onSubmit }) => (
+        const Login = ({ toasts, loginData, setLoginData, error, notice, onSubmit, onForgotPassword }) => (
             <>
                 <Toasts toasts={toasts} />
                 <div className="min-h-screen flex items-center justify-center p-4">
@@ -623,6 +812,10 @@
                                 <p className="text-red-500 text-sm text-center font-medium bg-red-50 py-2 rounded-lg">{error}</p>
                             )}
 
+                            {notice && (
+                                <p className="text-alorica-blue text-sm text-center font-medium bg-alorica-light py-2 px-3 rounded-lg">{notice}</p>
+                            )}
+
                             <button
                                 type="submit"
                                 className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all"
@@ -631,6 +824,18 @@
                                 <Icon name="chevron-right" size={20} />
                             </button>
                         </form>
+
+                        <button
+                            type="button"
+                            onClick={onForgotPassword}
+                            className="w-full mt-4 text-sm text-gray-500 hover:text-alorica-blue font-medium transition-colors"
+                        >
+                            Forgot password?
+                        </button>
+
+                        <p className="text-xs text-gray-400 text-center mt-3">
+                            A reset request goes to the administrator, who issues a temporary password.
+                        </p>
                     </div>
                 </div>
             </>
@@ -639,7 +844,6 @@
         // Replaces the app for accounts that still carry their temporary password.
         const PasswordChange = ({ user, form, setForm, feedback, onSubmit, onSignOut, toasts }) => {
             const fields = [
-                { key: 'current', label: 'Current password', autoComplete: 'current-password' },
                 { key: 'next', label: 'New password', autoComplete: 'new-password' },
                 { key: 'confirm', label: 'Confirm new password', autoComplete: 'new-password' }
             ];
@@ -653,7 +857,7 @@
                                 <img src="logo.png" alt="Alorica" className="h-12 mb-4" />
                                 <h1 className="text-2xl font-bold text-alorica-blue">Set a new password</h1>
                                 <p className="text-gray-500 text-sm mt-2 text-center">
-                                    {user.name}, please replace your temporary password before continuing.
+                                    {user.name}, you signed in with a temporary password. Choose a new one to continue.
                                 </p>
                             </div>
 
@@ -691,6 +895,10 @@
                                 </button>
                             </form>
 
+                            <p className="text-xs text-gray-400 text-center mt-4">
+                                At least 6 characters. The temporary password is no longer valid after this step.
+                            </p>
+
                             <button
                                 type="button"
                                 onClick={onSignOut}
@@ -708,7 +916,7 @@
             activeTab, setActiveTab,
             formData, setFormData,
             selectedRoad, setSelectedRoad,
-            locating, onLocate, onSubmit,
+            onSubmit,
             dropOffLabel, dropOffIcon, timeLabel
         }) => {
             const shiftSlots = activeTab === 'arrival' ? SHIFT_SLOTS.arrival : SHIFT_SLOTS.departure;
@@ -750,13 +958,6 @@
                         <div>
                             <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
                                 <span className="flex items-center gap-2"><Icon name={dropOffIcon} size={18} className="text-alorica-orange" /> {dropOffLabel}</span>
-                                <button
-                                    type="button"
-                                    onClick={() => onLocate('dropOffLocation')}
-                                    className="text-[10px] sm:text-xs bg-alorica-light text-alorica-blue px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1 shrink-0"
-                                >
-                                    <Icon name="locate" size={12} /> My Location
-                                </button>
                             </label>
 
                             {/* Road Selection Buttons */}
@@ -862,10 +1063,9 @@
                         <div className="pt-2">
                             <button
                                 type="submit"
-                                disabled={locating}
-                                className={`w-full bg-alorica-orange hover:shadow-2xl text-white font-black text-xl py-5 rounded-2xl shadow-xl transform active:scale-[0.98] transition-all flex items-center justify-center gap-3 group ${locating ? 'opacity-70 cursor-wait' : ''}`}
+                                className="w-full bg-alorica-orange hover:shadow-2xl text-white font-black text-xl py-5 rounded-2xl shadow-xl transform active:scale-[0.98] transition-all flex items-center justify-center gap-3 group"
                             >
-                                {locating ? 'Detecting Location...' : 'Book now'}
+                                Book now
                                 <Icon name="chevron-right" size={24} className="group-hover:translate-x-2 transition-transform" />
                             </button>
                         </div>
@@ -875,7 +1075,170 @@
             );
         };
 
-        const MyBookings = ({ bookings, onDelete }) => (
+        // The employee fixes their own booking here. When the pickup is less
+        // than an hour away the same form turns into a request for the team leader.
+        const EditBookingDialog = ({ booking, onCancel, onSubmit }) => {
+            const [form, setForm] = useState({
+                type: booking.type,
+                date: booking.date,
+                time: booking.time,
+                location: booking.location || ''
+            });
+            const [error, setError] = useState('');
+            const shiftSlots = form.type === 'Arrival' ? SHIFT_SLOTS.arrival : SHIFT_SLOTS.departure;
+
+            // Sending the booking to a slot inside the next hour needs approval too,
+            // otherwise the cutoff could simply be stepped around.
+            const tooSoon = Boolean(form.time) && !canEditBooking({ date: form.date, time: form.time });
+            const locked = needsLeaderApproval(booking, form);
+
+            const submit = (e) => {
+                e.preventDefault();
+                if (!form.time) { setError('Please select a time.'); return; }
+                if (form.date < todayISO()) { setError('The booking date cannot be in the past.'); return; }
+                if (!form.location.trim()) { setError('Please enter the location.'); return; }
+                onSubmit({ ...form, location: form.location.trim() });
+            };
+
+            return (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black bg-opacity-40 p-4">
+                    <form onSubmit={submit} className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto fade-in">
+                        <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-2">
+                            <Icon name="pencil" size={18} className="text-alorica-orange" />
+                            <h3 className="font-bold text-alorica-blue">Edit booking</h3>
+                        </div>
+
+                        <div className="p-6 space-y-5">
+                            {locked && (
+                                <div className="flex items-start gap-2 text-xs bg-orange-50 border border-orange-100 text-alorica-orange rounded-xl p-3">
+                                    <Icon name="alert-triangle" size={16} className="shrink-0 mt-0.5" />
+                                    <span>
+                                        {tooSoon
+                                            ? 'The time you picked is less than an hour away, so this change needs your team leader\'s approval.'
+                                            : 'Less than an hour is left before this pickup, so it can no longer be changed directly. Send the change to your team leader — it is applied once they approve it.'}
+                                    </span>
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2 text-sm">
+                                    <Icon name="bus" size={16} className="text-alorica-orange" /> Direction
+                                </label>
+                                <div className="flex gap-3">
+                                    {['Arrival', 'Departure'].map((direction) => (
+                                        <button
+                                            key={direction}
+                                            type="button"
+                                            onClick={() => setForm({ ...form, type: direction, time: '' })}
+                                            className={`flex-1 py-2.5 rounded-xl font-bold text-sm border-2 transition-all ${
+                                                form.type === direction
+                                                    ? (direction === 'Arrival' ? 'bg-green-600 text-white border-green-600' : 'bg-red-600 text-white border-red-600')
+                                                    : 'bg-white text-alorica-blue border-gray-100 hover:border-alorica-light'
+                                            }`}
+                                        >
+                                            {direction}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2 text-sm">
+                                    <Icon name="clock" size={16} className="text-alorica-orange" />
+                                    {form.type === 'Arrival' ? 'Pickup time' : 'Drop-off time'}
+                                </label>
+                                <div className="rounded-2xl border border-gray-100 bg-white p-4 space-y-3 max-h-56 overflow-y-auto">
+                                    {shiftSlots.map((group) => (
+                                        <div key={group.shift}>
+                                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider mb-1.5">{group.shift}</p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {group.times.map((t) => (
+                                                    <button
+                                                        key={t}
+                                                        type="button"
+                                                        onClick={() => setForm({ ...form, time: t })}
+                                                        className={`px-3 py-2 rounded-xl border-2 text-xs font-bold tabular-nums transition-all ${
+                                                            form.time === t
+                                                                ? 'bg-alorica-orange text-white border-alorica-orange'
+                                                                : 'bg-white text-alorica-blue border-gray-100 hover:border-alorica-orange'
+                                                        }`}
+                                                    >
+                                                        {formatTime12h(t)}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2 text-sm">
+                                    <Icon name="calendar" size={16} className="text-alorica-orange" /> Date
+                                </label>
+                                <input
+                                    type="date"
+                                    required
+                                    min={todayISO()}
+                                    className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm"
+                                    value={form.date}
+                                    onChange={(e) => setForm({ ...form, date: e.target.value })}
+                                />
+                            </div>
+
+                            <div>
+                                <label className="flex items-center gap-2 text-alorica-blue font-bold mb-2 text-sm">
+                                    <Icon name="map-pin" size={16} className="text-alorica-orange" />
+                                    {form.type === 'Arrival' ? 'Pickup location' : 'Drop off location'}
+                                </label>
+                                <input
+                                    list="edit-locations"
+                                    required
+                                    placeholder="Select or enter the location"
+                                    className="w-full px-4 py-3 border-2 border-gray-100 rounded-xl outline-none bg-gray-50 text-sm"
+                                    value={form.location}
+                                    onChange={(e) => setForm({ ...form, location: e.target.value })}
+                                />
+                                <datalist id="edit-locations">
+                                    {ALL_POINTS.map((loc, index) => (
+                                        <option key={index} value={loc} />
+                                    ))}
+                                </datalist>
+                            </div>
+
+                            <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                                <Icon name="bus" size={14} className="text-alorica-orange" />
+                                Bus stays on {booking.bus}.
+                            </p>
+
+                            {error && <p className="text-xs text-red-600">{error}</p>}
+                        </div>
+
+                        <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
+                            <button
+                                type="button"
+                                onClick={onCancel}
+                                className="flex-1 px-4 py-2.5 rounded-lg border border-gray-200 text-gray-600 font-semibold text-sm hover:bg-gray-50 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                className={`flex-1 px-4 py-2.5 rounded-lg text-white font-semibold text-sm transition-colors ${
+                                    locked ? 'bg-alorica-blue hover:bg-opacity-90' : 'bg-alorica-orange hover:opacity-90'
+                                }`}
+                            >
+                                {locked ? 'Send to team leader' : 'Save changes'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        };
+
+        const MyBookings = ({ bookings, onDelete, onEdit, pendingChanges }) => {
+            const pendingFor = (id) => pendingChanges.find((r) => r.bookingId === id && r.status === 'pending');
+            return (
             <div className="p-4 sm:p-8 border-t border-gray-100 bg-gray-50/50">
                 <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-xl mb-6">
                     <Icon name="calendar-check" size={24} className="text-alorica-orange" /> My Bookings
@@ -907,6 +1270,27 @@
                                         <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Bus</p>
                                         <p className={`font-bold ${b.bus === WAITLIST ? 'text-red-600' : 'text-alorica-orange'}`}>{b.bus}</p>
                                     </div>
+                                    {!canEditBooking(b) && !pendingFor(b.id) && (
+                                        <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-semibold text-alorica-orange bg-orange-50 border border-orange-100 rounded-full px-2.5 py-1">
+                                            <Icon name="clock" size={10} /> Needs leader approval
+                                        </span>
+                                    )}
+                                    <button
+                                        onClick={() => onEdit(b)}
+                                        disabled={Boolean(pendingFor(b.id))}
+                                        className={`p-3 rounded-xl border border-transparent transition-colors ${
+                                            pendingFor(b.id)
+                                                ? 'text-gray-300 cursor-not-allowed'
+                                                : 'text-alorica-blue hover:bg-blue-50 hover:border-blue-100'
+                                        }`}
+                                        title={pendingFor(b.id)
+                                            ? 'A request for this booking is already waiting'
+                                            : canEditBooking(b)
+                                                ? 'Edit booking'
+                                                : 'Less than an hour left — the team leader must approve the change'}
+                                    >
+                                        <Icon name="pencil" size={20} />
+                                    </button>
                                     <button
                                         onClick={() => onDelete(b.id)}
                                         className="p-3 hover:bg-red-50 rounded-xl text-red-500 transition-colors border border-transparent hover:border-red-100"
@@ -915,12 +1299,31 @@
                                         <Icon name="trash-2" size={20} />
                                     </button>
                                 </div>
+
+                                {pendingFor(b.id) && (
+                                    <div className="w-full mt-1 pt-3 border-t border-orange-100 flex flex-wrap items-center gap-2 text-xs">
+                                        <span className="inline-flex items-center gap-1 font-semibold text-alorica-orange bg-orange-50 border border-orange-100 rounded-full px-3 py-1.5">
+                                            <Icon name="clock" size={12} />
+                                            {pendingFor(b.id).direction === 'employee'
+                                                ? 'Your change is waiting for the team leader'
+                                                : pendingFor(b.id).kind === 'delete'
+                                                    ? 'The team leader asked to delete this booking'
+                                                    : `The team leader asked to change the bus to ${pendingFor(b.id).changes[0].to}`}
+                                        </span>
+                                        <span className="text-gray-500">
+                                            {pendingFor(b.id).direction === 'employee'
+                                                ? 'You will be notified once they answer.'
+                                                : 'Respond from the bell menu at the top.'}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>
                 )}
             </div>
-        );
+            );
+        };
 
         const AdminDashboard = ({
             adminView, setAdminView, adminTabs,
@@ -931,18 +1334,40 @@
             buses, newBus, setNewBus, busFeedback, setBusFeedback,
             onAddBus, onDeleteBus, onUpdateCapacity, busUsage,
             newUser, setNewUser, userFeedback, setUserFeedback, onCreateUser, onDeleteUser, allUsers, currentUser,
+            passwordRequests, onResetPassword, onDismissRequest,
+            pendingChanges, auditLog,
             importing, setImporting, onExportBackup, onImportBackup,
-            role, onSubmitToAdmin, pendingReviewCount
+            role, onSubmitToAdmin, pendingReviewCount,
+            sheetStatus, sheet, onSendBack, onOverrideRequest
         }) => {
             const isTeamLead = role === 'teamlead';
+            const isAdmin = role === 'admin';
+            // A booking can only have one approval request open at a time.
+            const pendingFor = (bookingId) => pendingChanges.find((r) => r.bookingId === bookingId && r.status === 'pending');
+
+            // How a change request ended up, shown in the requests tab.
+            const requestStatus = (r) => {
+                if (r.status === 'approved') return { label: 'Approved', cls: 'bg-green-50 text-green-700' };
+                if (r.status === 'rejected') return { label: 'Declined', cls: 'bg-gray-100 text-gray-500' };
+                if (r.status === 'expired') return { label: 'Expired', cls: 'bg-red-50 text-red-600' };
+                if (r.status === 'overridden') return { label: 'Overridden', cls: 'bg-red-100 text-red-700' };
+                return r.direction === 'employee'
+                    ? { label: 'Waiting: team leader', cls: 'bg-blue-50 text-alorica-blue' }
+                    : { label: 'Waiting: employee', cls: 'bg-orange-100 text-alorica-orange' };
+            };
+
+            const hoursLeft = (r) => Math.max(
+                0,
+                Math.ceil((CHANGE_REQUEST_TTL - (Date.now() - new Date(r.requestedAt).getTime())) / 3600000)
+            );
             return (
             <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-white">
                 <div className="bg-alorica-blue p-6 sm:p-8 text-white text-center">
                     <h2 className="text-2xl sm:text-3xl font-bold mb-2">{isTeamLead ? 'Team Leader Dashboard' : 'Admin Dashboard'}</h2>
                     <p className="opacity-80">
                         {isTeamLead
-                            ? 'Review and adjust employee bookings, then send them to the admin'
-                            : 'Manage employee bookings, the bus fleet and user accounts'}
+                            ? 'Adjust the bus distribution and send the sheet to the admin — changes need the employee\'s approval'
+                            : 'Print and share the final sheet, manage the bus fleet and user accounts'}
                     </p>
                 </div>
 
@@ -959,6 +1384,11 @@
                             }`}
                         >
                             <Icon name={tab.icon} size={18} /> {tab.label}
+                            {tab.badge > 0 && (
+                                <span className="ml-1 bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5 min-w-[1.25rem]">
+                                    {tab.badge}
+                                </span>
+                            )}
                         </button>
                     ))}
                 </div>
@@ -968,6 +1398,35 @@
                 {/* ================= BOOKINGS ================= */}
                 {adminView === 'bookings' && (
                     <>
+                    <div className="max-w-4xl mx-auto mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3">
+                        <div className="flex items-center gap-3">
+                            <Icon name="file-spreadsheet" size={18} className="text-alorica-blue shrink-0" />
+                            <div>
+                                <p className="text-sm font-semibold text-alorica-blue flex items-center gap-2">
+                                    Booking sheet
+                                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${SHEET_STATUS[sheetStatus].cls}`}>
+                                        {SHEET_STATUS[sheetStatus].label}
+                                    </span>
+                                </p>
+                                <p className="text-[11px] text-gray-500 mt-0.5">
+                                    {sheet.updatedAt
+                                        ? `Last updated ${new Date(sheet.updatedAt).toLocaleString()}${sheet.updatedBy ? ` by ${sheet.updatedBy}` : ''}`
+                                        : 'Not sent to the admin yet.'}
+                                    {sheetStatus === 'locked' && ' — the admin printed it, so the buses are already ordered.'}
+                                </p>
+                            </div>
+                        </div>
+                        {isAdmin && (sheetStatus === 'sent' || sheetStatus === 'locked') && (
+                            <button
+                                type="button"
+                                onClick={onSendBack}
+                                className="shrink-0 text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
+                            >
+                                <Icon name="undo-2" size={14} /> Send back to team leader
+                            </button>
+                        )}
+                    </div>
+
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 max-w-4xl mx-auto">
                         <div className="bg-alorica-light rounded-2xl p-4 text-center">
                             <p className="text-3xl font-black text-alorica-blue">{filteredBookings.length}</p>
@@ -1037,13 +1496,15 @@
                                         Clear filters
                                     </button>
                                 )}
-                                <button
-                                    type="button"
-                                    onClick={onRedistribute}
-                                    className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
-                                >
-                                    <Icon name="shuffle" size={14} /> Auto-assign buses
-                                </button>
+                                {isTeamLead && (
+                                    <button
+                                        type="button"
+                                        onClick={onRedistribute}
+                                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
+                                    >
+                                        <Icon name="shuffle" size={14} /> Auto-assign buses
+                                    </button>
+                                )}
                             </div>
                         </div>
 
@@ -1060,12 +1521,15 @@
                             <button
                                 type="button"
                                 onClick={onSubmitToAdmin}
-                                className="w-full bg-alorica-orange hover:shadow-2xl text-white font-bold py-4 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all"
+                                disabled={sheetStatus === 'locked'}
+                                className={`w-full font-bold py-4 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all ${sheetStatus === 'locked' ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-alorica-orange hover:shadow-2xl text-white'}`}
                             >
                                 <Icon name="send" size={20} /> Send to Admin
                             </button>
                             <p className="text-center text-xs text-gray-400 mt-2">
-                                Marks the bookings above as reviewed and sends them to the admin for final confirmation.
+                                {sheetStatus === 'locked'
+                                    ? 'The admin printed this sheet and the buses are already ordered. Ask the admin to send it back before sending again.'
+                                    : 'Marks the bookings above as reviewed and sends them to the admin for final confirmation.'}
                             </p>
                         </div>
                     ) : (
@@ -1158,7 +1622,7 @@
                                                     <th className="text-left px-3 py-2 font-semibold">Type</th>
                                                     <th className="text-left px-3 py-2 font-semibold">Bus</th>
                                                     <th className="text-center px-3 py-2 font-semibold">Status</th>
-                                                    <th className="text-center px-3 py-2 font-semibold">Actions</th>
+                                                    {isTeamLead && <th className="text-center px-3 py-2 font-semibold">Actions</th>}
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -1174,14 +1638,29 @@
                                                             </span>
                                                         </td>
                                                         <td className="px-3 py-2">
-                                                            <select
-                                                                value={b.bus || WAITLIST}
-                                                                onChange={(e) => onSetBus(b.id, e.target.value)}
-                                                                className={`text-xs font-semibold rounded-lg px-2 py-1 border outline-none ${b.bus === WAITLIST ? 'border-red-200 text-red-600 bg-red-50' : 'border-gray-200 text-alorica-blue bg-white'}`}
-                                                            >
-                                                                {busNames.map((n) => <option key={n} value={n}>{n}</option>)}
-                                                                <option value={WAITLIST}>{WAITLIST}</option>
-                                                            </select>
+                                                            {isTeamLead ? (
+                                                                pendingFor(b.id) && pendingFor(b.id).kind === 'update' && pendingFor(b.id).direction !== 'employee' ? (
+                                                                    <div className="flex items-center gap-1 whitespace-nowrap">
+                                                                        <span className="text-xs font-semibold rounded-lg px-2 py-1 border border-gray-200 text-gray-500">{b.bus}</span>
+                                                                        <span className="text-gray-400">&rarr;</span>
+                                                                        <span className="text-xs font-semibold rounded-lg px-2 py-1 bg-orange-50 text-alorica-orange border border-orange-200">{pendingFor(b.id).changes[0].to}</span>
+                                                                    </div>
+                                                                ) : (
+                                                                    <select
+                                                                        value={b.bus || WAITLIST}
+                                                                        disabled={Boolean(pendingFor(b.id))}
+                                                                        onChange={(e) => onSetBus(b.id, e.target.value)}
+                                                                        className={`text-xs font-semibold rounded-lg px-2 py-1 border outline-none disabled:opacity-60 disabled:cursor-not-allowed ${b.bus === WAITLIST ? 'border-red-200 text-red-600 bg-red-50' : 'border-gray-200 text-alorica-blue bg-white'}`}
+                                                                    >
+                                                                        {busNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                                                                        <option value={WAITLIST}>{WAITLIST}</option>
+                                                                    </select>
+                                                                )
+                                                            ) : (
+                                                                <span className={`text-xs font-semibold rounded-lg px-2 py-1 border whitespace-nowrap ${b.bus === WAITLIST ? 'border-red-200 text-red-600 bg-red-50' : 'border-gray-200 text-alorica-blue bg-white'}`}>
+                                                                    {b.bus}
+                                                                </span>
+                                                            )}
                                                         </td>
                                                         <td className="px-3 py-2 text-center">
                                                             <span
@@ -1193,16 +1672,25 @@
                                                                 {b.submittedAt ? 'Sent' : 'Pending'}
                                                             </span>
                                                         </td>
+                                                        {isTeamLead && (
                                                         <td className="px-3 py-2 text-center">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => onDeleteBooking(b.id)}
-                                                                className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
-                                                                title="Delete booking"
-                                                            >
-                                                                <Icon name="trash-2" size={16} />
-                                                            </button>
+                                                            {pendingFor(b.id) ? (
+                                                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-alorica-orange bg-orange-50 border border-orange-100 rounded-full px-2 py-1 whitespace-nowrap">
+                                                                    <Icon name="clock" size={12} />
+                                                                    {pendingFor(b.id).kind === 'delete' ? 'Waiting: deletion' : 'Waiting: approval'}
+                                                                </span>
+                                                            ) : (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => onDeleteBooking(b.id)}
+                                                                    className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
+                                                                    title="Request deletion from the employee"
+                                                                >
+                                                                    <Icon name="trash-2" size={16} />
+                                                                </button>
+                                                            )}
                                                         </td>
+                                                        )}
                                                     </tr>
                                                 ))}
                                             </tbody>
@@ -1495,6 +1983,221 @@
                     </div>
                 )}
 
+                {/* ================= PASSWORD REQUESTS ================= */}
+                {adminView === 'requests' && (
+                    <div className="max-w-3xl mx-auto">
+                        <div className="bg-alorica-light rounded-2xl p-6 mb-8">
+                            <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
+                                <Icon name="key-round" size={20} className="text-alorica-orange" /> Password Reset Requests
+                            </h3>
+                            <p className="text-xs text-gray-600">
+                                Employees who forgot their password appear here. Resetting an account issues a random
+                                temporary password that is shown to you once and expires after 24 hours — the employee
+                                must choose a new password when they sign in with it.
+                            </p>
+                        </div>
+
+                        {passwordRequests.length === 0 ? (
+                            <div className="text-center py-16 text-gray-400">
+                                <Icon name="shield-check" size={40} className="mx-auto mb-3 opacity-50" />
+                                <p className="font-medium">No password requests yet</p>
+                            </div>
+                        ) : (
+                            <div className="border border-gray-100 rounded-2xl overflow-hidden">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-alorica-light text-alorica-blue">
+                                            <tr>
+                                                <th className="text-left px-4 py-2 font-semibold">Employee</th>
+                                                <th className="text-left px-4 py-2 font-semibold">Requested</th>
+                                                <th className="text-left px-4 py-2 font-semibold">Status</th>
+                                                <th className="text-center px-4 py-2 font-semibold">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {[...passwordRequests].reverse().map((r) => (
+                                                <tr key={r.id} className={`border-t border-gray-100 ${r.status === 'open' ? 'bg-orange-50 bg-opacity-40' : ''}`}>
+                                                    <td className="px-4 py-2">
+                                                        <p className="text-gray-800 font-medium">{r.name}</p>
+                                                        <p className="text-xs text-gray-400">{r.username}</p>
+                                                    </td>
+                                                    <td className="px-4 py-2 text-gray-600">{new Date(r.requestedAt).toLocaleString()}</td>
+                                                    <td className="px-4 py-2">
+                                                        {r.status === 'open' ? (
+                                                            <span className="text-xs font-semibold px-2 py-1 rounded-full bg-orange-100 text-alorica-orange">Waiting</span>
+                                                        ) : r.status === 'resolved' ? (
+                                                            <span className="text-xs font-semibold px-2 py-1 rounded-full bg-green-50 text-green-700" title={`Handled by ${r.resolvedBy || 'admin'}`}>
+                                                                Reset done
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-xs font-semibold px-2 py-1 rounded-full bg-gray-100 text-gray-500">Discarded</span>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-4 py-2">
+                                                        {r.status === 'open' ? (
+                                                            <div className="flex items-center justify-center gap-1">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => onResetPassword(r.id)}
+                                                                    className="text-xs font-semibold px-3 py-2 rounded-lg bg-alorica-blue text-white hover:bg-opacity-90 transition-colors"
+                                                                >
+                                                                    Reset password
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => onDismissRequest(r.id)}
+                                                                    className="text-xs font-semibold px-3 py-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100 transition-colors"
+                                                                >
+                                                                    Discard
+                                                                </button>
+                                                            </div>
+                                                        ) : (
+                                                            <p className="text-xs text-gray-400 text-center">
+                                                                {r.resolvedAt ? `by ${r.resolvedBy || 'admin'} · ${new Date(r.resolvedAt).toLocaleString()}` : '—'}
+                                                            </p>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        <p className="text-xs text-gray-400 mt-4 text-center">
+                            The request is stored on the server, so the admin and the team leader both see it.
+                            The employee is not emailed — pass the temporary password to them yourself.
+                        </p>
+                    </div>
+                )}
+
+                {/* ================= CHANGE REQUESTS ================= */}
+                {adminView === 'changes' && (
+                    <div className="max-w-4xl mx-auto space-y-10">
+                        <div className="bg-alorica-light rounded-2xl p-6">
+                            <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
+                                <Icon name="git-pull-request" size={20} className="text-alorica-orange" /> Booking Change Requests
+                            </h3>
+                            <p className="text-xs text-gray-600">
+                                Every adjustment the team leader makes is sent to the employee first. Nothing is applied
+                                until they approve it, and a request nobody answers lapses automatically after 48 hours.
+                                The reverse also lands here: an employee changing a booking less than an hour before the
+                                pickup needs a team leader to approve it.
+                            </p>
+                        </div>
+
+                        {pendingChanges.length === 0 ? (
+                            <div className="text-center py-12 text-gray-400">
+                                <Icon name="inbox" size={40} className="mx-auto mb-3 opacity-50" />
+                                <p className="font-medium">No change requests yet</p>
+                            </div>
+                        ) : (
+                            <div className="border border-gray-100 rounded-2xl overflow-hidden">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm min-w-[820px]">
+                                        <thead className="bg-alorica-light text-alorica-blue">
+                                            <tr>
+                                                <th className="text-left px-4 py-2 font-semibold">Employee</th>
+                                                <th className="text-left px-4 py-2 font-semibold">Booking</th>
+                                                <th className="text-left px-4 py-2 font-semibold">Requested change</th>
+                                                <th className="text-left px-4 py-2 font-semibold">By</th>
+                                                <th className="text-center px-4 py-2 font-semibold">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {[...pendingChanges].reverse().map((r) => {
+                                                const state = requestStatus(r);
+                                                return (
+                                                    <tr key={r.id} className={`border-t border-gray-100 ${r.status === 'pending' ? 'bg-orange-50 bg-opacity-40' : ''}`}>
+                                                        <td className="px-4 py-3">
+                                                            <p className="text-gray-800 font-medium">{r.snapshot.employeeName || r.bookingId}</p>
+                                                            <p className="text-xs text-gray-400">{r.snapshot.type} · {new Date(r.requestedAt).toLocaleString()}</p>
+                                                        </td>
+                                                        <td className="px-4 py-3 text-gray-600">
+                                                            {r.snapshot.date} at {formatTime12h(r.snapshot.time)}
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            {r.changes.map((c) => (
+                                                                <span key={c.field} className="inline-flex items-center gap-1 text-xs text-gray-600 mr-2 whitespace-nowrap">
+                                                                    <span className="font-semibold">{c.label}:</span>
+                                                                    <span className="text-gray-400 line-through">{changeValue(c, c.from)}</span>
+                                                                    <Icon name="arrow-right" size={12} className="text-alorica-orange" />
+                                                                    <span className="font-semibold text-alorica-blue">{changeValue(c, c.to)}</span>
+                                                                </span>
+                                                            ))}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-gray-600">
+                                                            <p>{r.requestedByName}</p>
+                                                            <p className="text-[10px] text-gray-400">
+                                                                {r.direction === 'employee' ? 'Employee request' : 'Team leader request'}
+                                                            </p>
+                                                        </td>
+                                                        <td className="px-4 py-3 text-center">
+                                                            <span className={`text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap ${state.cls}`}>
+                                                                {state.label}
+                                                            </span>
+                                                            {r.status === 'pending' && (
+                                                                <p className="text-[10px] text-gray-400 mt-1">expires in {hoursLeft(r)}h</p>
+                                                            )}
+                                                            {r.status !== 'pending' && r.decidedAt && (
+                                                                <p className="text-[10px] text-gray-400 mt-1">
+                                                                    {r.decidedBy === 'system' ? 'auto' : r.decidedBy} · {new Date(r.decidedAt).toLocaleString()}
+                                                                </p>
+                                                            )}
+                                                            {r.status === 'pending' && isTeamLead && r.direction !== 'employee' && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => onOverrideRequest(r)}
+                                                                    className="mt-2 text-[11px] font-semibold px-2 py-1 rounded-lg bg-red-50 text-red-700 border border-red-100 hover:bg-red-100 transition-colors inline-flex items-center gap-1"
+                                                                >
+                                                                    <Icon name="zap" size={12} /> Emergency override
+                                                                </button>
+                                                            )}
+                                                            {r.status === 'overridden' && r.overrideReason && (
+                                                                <p className="text-[10px] text-red-600 mt-1 max-w-[14rem] mx-auto">{r.overrideReason}</p>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        <div>
+                            <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-3">
+                                <Icon name="history" size={20} className="text-alorica-orange" /> Activity log
+                            </h3>
+                            {auditLog.length === 0 ? (
+                                <p className="text-center text-gray-400 py-8 text-sm">Nothing recorded yet.</p>
+                            ) : (
+                                <div className="border border-gray-100 rounded-2xl divide-y divide-gray-50 max-h-[32rem] overflow-y-auto">
+                                    {[...auditLog].reverse().map((entry) => (
+                                        <div key={entry.id} className="px-4 py-3 flex items-start gap-3">
+                                            <span className="mt-0.5 shrink-0 text-alorica-orange">
+                                                <Icon name="dot" size={18} />
+                                            </span>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-sm text-alorica-blue font-semibold">
+                                                    {entry.action} <span className="text-gray-400 font-normal">·</span>{' '}
+                                                    <span className="font-medium text-gray-700">{entry.target}</span>
+                                                </p>
+                                                {entry.details && <p className="text-xs text-gray-500 mt-0.5">{entry.details}</p>}
+                                                <p className="text-[10px] text-gray-400 mt-1">
+                                                    {entry.actorName} ({ROLE_LABELS[entry.actorRole] || entry.actorRole}) · {new Date(entry.at).toLocaleString()}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 </div>
             </div>
             );
@@ -1573,18 +2276,202 @@
             </div>
         );
 
+        // The team leader's escape hatch: an urgent change that cannot wait for the
+        // employee to answer. It applies straight away, so a reason is required and
+        // the employee is told exactly why it happened.
+        const OverrideDialog = ({ request, onCancel, onConfirm }) => {
+            const [reason, setReason] = useState('');
+            const ready = reason.trim().length >= 10;
+            return (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black bg-opacity-40 p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 fade-in">
+                        <div className="flex items-start gap-3">
+                            <div className="shrink-0 w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-600">
+                                <Icon name="zap" size={20} />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-alorica-blue">Emergency override</h3>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    This applies the request immediately without {request.snapshot.employeeName || 'the employee'}'s
+                                    approval. They are notified with your reason, and the action is recorded in the activity log.
+                                </p>
+                            </div>
+                        </div>
+
+                        <label className="block text-xs font-semibold text-gray-600 mt-5 mb-1">
+                            Reason (at least 10 characters)
+                        </label>
+                        <textarea
+                            value={reason}
+                            onChange={(e) => setReason(e.target.value)}
+                            rows={3}
+                            placeholder="e.g. Bus cancelled by the vendor — rerouted before the morning shift."
+                            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-alorica-orange resize-none"
+                        />
+
+                        <div className="flex gap-3 mt-5">
+                            <button
+                                type="button"
+                                onClick={onCancel}
+                                className="flex-1 px-4 py-2.5 rounded-lg border border-gray-200 text-gray-600 font-semibold text-sm hover:bg-gray-50 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!ready}
+                                onClick={() => onConfirm(reason.trim())}
+                                className={`flex-1 px-4 py-2.5 rounded-lg bg-red-600 text-white font-semibold text-sm transition-colors ${ready ? 'hover:bg-red-700' : 'opacity-50 cursor-not-allowed'}`}
+                            >
+                                Override now
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Shown once to the admin right after a reset; only the hash is stored afterwards.
+        const TempPasswordDialog = ({ reveal, onClose, onCopy }) => (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black bg-opacity-40 p-4">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 fade-in">
+                    <div className="flex items-start gap-3 mb-4">
+                        <div className="shrink-0 w-10 h-10 rounded-full bg-alorica-light flex items-center justify-center text-alorica-blue">
+                            <Icon name="key-round" size={20} />
+                        </div>
+                        <div>
+                            <h3 className="font-bold text-alorica-blue">Temporary password</h3>
+                            <p className="text-xs text-gray-500 mt-1">
+                                Give this to {reveal.name} ({reveal.username}). It is shown only once and cannot be recovered.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-xl px-4 py-4 text-center select-all">
+                        <p className="text-2xl font-black tracking-wider text-alorica-blue break-all">{reveal.password}</p>
+                    </div>
+
+                    <p className="text-xs text-gray-500 mt-3 text-center">
+                        Expires {new Date(reveal.expiresAt).toLocaleString()}. The employee must set a new password when signing in.
+                    </p>
+
+                    <div className="flex gap-3 mt-6">
+                        <button
+                            type="button"
+                            onClick={onCopy}
+                            className="flex-1 px-4 py-2.5 rounded-lg border border-alorica-blue text-alorica-blue font-semibold text-sm hover:bg-alorica-light transition-colors"
+                        >
+                            Copy
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="flex-1 px-4 py-2.5 rounded-lg bg-alorica-blue text-white font-semibold text-sm hover:bg-opacity-90 transition-colors"
+                        >
+                            Done
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+
+        // Bell + panel used by every role. Approval items carry their own action buttons.
+        const NotificationBell = ({ items, open, onOpen, onClose, onDecide, pendingRequest }) => (
+            <div className="relative">
+                <button
+                    type="button"
+                    onClick={open ? onClose : onOpen}
+                    className="relative p-2 hover:bg-blue-50 rounded-full text-alorica-blue transition-colors"
+                    title="Notifications"
+                >
+                    <Icon name="bell" size={22} />
+                    {items.filter((n) => !n.read).length > 0 && (
+                        <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[1.15rem] h-[1.15rem] px-1 flex items-center justify-center">
+                            {items.filter((n) => !n.read).length}
+                        </span>
+                    )}
+                </button>
+
+                {open && (
+                    <>
+                        <div className="fixed inset-0 z-[95]" onClick={onClose} />
+                        <div className="absolute right-0 mt-2 w-[20rem] sm:w-[22rem] max-h-[26rem] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-gray-100 z-[100] fade-in">
+                            <div className="px-4 py-3 border-b border-gray-100 sticky top-0 bg-white">
+                                <h4 className="font-bold text-alorica-blue text-sm">Notifications</h4>
+                            </div>
+
+                            {items.length === 0 ? (
+                                <p className="text-center text-gray-400 text-sm py-10">Nothing here yet.</p>
+                            ) : (
+                                <div className="divide-y divide-gray-50">
+                                    {[...items].reverse().map((n) => {
+                                        const request = n.requestId ? pendingRequest(n.requestId) : null;
+                                        return (
+                                            <div key={n.id} className={`px-4 py-3 ${request ? 'bg-orange-50' : ''}`}>
+                                                <div className="flex items-start gap-2">
+                                                    <span className={`mt-0.5 shrink-0 ${n.kind === 'approval' ? 'text-alorica-orange' : n.kind === 'decision' ? 'text-green-600' : 'text-alorica-blue'}`}>
+                                                        <Icon name={n.kind === 'approval' ? 'clock' : n.kind === 'decision' ? 'check-circle' : 'info'} size={16} />
+                                                    </span>
+                                                    <div className="min-w-0">
+                                                        <p className="text-sm font-bold text-alorica-blue">{n.title}</p>
+                                                        <p className="text-xs text-gray-600 leading-relaxed">{n.body}</p>
+                                                        <p className="text-[10px] text-gray-400 mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+
+                                                        {request && (
+                                                            <div className="flex gap-2 mt-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => onDecide(request.id, true)}
+                                                                    className="text-xs font-bold px-3 py-1.5 rounded-lg bg-alorica-blue text-white hover:bg-opacity-90 transition-colors"
+                                                                >
+                                                                    Approve
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => onDecide(request.id, false)}
+                                                                    className="text-xs font-bold px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors"
+                                                                >
+                                                                    Decline
+                                                                </button>
+                                                            </div>
+                                                        )}
+
+                                                        {n.kind === 'approval' && !request && (
+                                                            <p className="text-[10px] font-semibold text-gray-400 mt-1">Already handled</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </>
+                )}
+            </div>
+        );
+
         const App = () => {
             /* ------------------ state ------------------ */
             const [isLoggedIn, setIsLoggedIn] = useState(false);
             const [currentUser, setCurrentUser] = useState(null);
             const [loginData, setLoginData] = useState({ username: '', password: '' });
             const [error, setError] = useState('');
-            const [locating, setLocating] = useState(false);
             const [activeTab, setActiveTab] = useState('arrival');
             const [bookings, setBookings] = useState(() => loadJSON(STORAGE.bookings, []));
             const [customUsers, setCustomUsers] = useState(() => loadJSON(STORAGE.users, []));
             const [removedUsers, setRemovedUsers] = useState(() => loadJSON(STORAGE.removedUsers, []));
+            const [passwordRequests, setPasswordRequests] = useState(() => loadJSON(STORAGE.passwordRequests, []));
+            const [changeRequests, setChangeRequests] = useState(() => loadJSON(STORAGE.changeRequests, []));
+            const [notifications, setNotifications] = useState(() => loadJSON(STORAGE.notifications, []));
+            const [bellOpen, setBellOpen] = useState(false);
+            const [tempPasswordReveal, setTempPasswordReveal] = useState(null);
+            const [loginNotice, setLoginNotice] = useState('');
             const [buses, setBuses] = useState(() => loadJSON(STORAGE.buses, DEFAULT_BUSES));
+            const [auditLog, setAuditLog] = useState(() => loadJSON(STORAGE.audit, []));
+            const [sheetState, setSheetState] = useState(() => loadJSON(STORAGE.sheet, freshSheet()));
+            const [syncOnline, setSyncOnline] = useState(SYNC.online);
             const [adminView, setAdminView] = useState('bookings');
             const [newUser, setNewUser] = useState({ name: '', username: '', password: '', role: 'user' });
             const [newBus, setNewBus] = useState({ name: '', capacity: '' });
@@ -1595,9 +2482,11 @@
             const [filters, setFilters] = useState({ q: '', from: '', to: '' });
             const [importing, setImporting] = useState(false);
             const [selectedRoad, setSelectedRoad] = useState(null);
-            const [pwdForm, setPwdForm] = useState({ current: '', next: '', confirm: '' });
+            const [pwdForm, setPwdForm] = useState({ next: '', confirm: '' });
             const [pwdFeedback, setPwdFeedback] = useState({ type: '', text: '' });
             const [confirmRequest, setConfirmRequest] = useState(null);
+            const [editingBooking, setEditingBooking] = useState(null);
+            const [overrideRequest, setOverrideRequest] = useState(null);
 
             const [formData, setFormData] = useState({
                 dropOffLocation: '',
@@ -1609,7 +2498,139 @@
             useEffect(() => { saveJSON(STORAGE.bookings, bookings); }, [bookings]);
             useEffect(() => { saveJSON(STORAGE.users, customUsers); }, [customUsers]);
             useEffect(() => { saveJSON(STORAGE.removedUsers, removedUsers); }, [removedUsers]);
+            useEffect(() => { saveJSON(STORAGE.passwordRequests, passwordRequests); }, [passwordRequests]);
+            useEffect(() => { saveJSON(STORAGE.changeRequests, changeRequests); }, [changeRequests]);
+            useEffect(() => { saveJSON(STORAGE.notifications, notifications); }, [notifications]);
             useEffect(() => { saveJSON(STORAGE.buses, buses); }, [buses]);
+            useEffect(() => { saveJSON(STORAGE.audit, auditLog); }, [auditLog]);
+            useEffect(() => { saveJSON(STORAGE.sheet, sheetState); }, [sheetState]);
+
+            /* ------------------ server sync ------------------
+             * Every device polls the revision counter; when it moves the
+             * collections are re-read, so a change made anywhere shows up
+             * here within a few seconds.
+             */
+            useEffect(() => {
+                let cancelled = false;
+
+                const listener = (online) => setSyncOnline(online);
+                SYNC.listeners.add(listener);
+
+                const applyServerState = (collections) => {
+                    const touched = syncApplyRemote(collections);
+                    if (cancelled) return;
+                    if (touched.bookings) setBookings(touched.bookings);
+                    if (touched.users) setCustomUsers(touched.users);
+                    if (touched.removedUsers) setRemovedUsers(touched.removedUsers);
+                    if (touched.passwordRequests) setPasswordRequests(touched.passwordRequests);
+                    if (touched.changeRequests) setChangeRequests(touched.changeRequests);
+                    if (touched.notifications) setNotifications(touched.notifications);
+                    if (touched.audit) setAuditLog(touched.audit);
+                    if (touched.sheet) setSheetState(touched.sheet.length ? touched.sheet : freshSheet());
+                    // An empty fleet means "never configured", so defaults stay.
+                    setBuses(touched.buses && touched.buses.length ? touched.buses : DEFAULT_BUSES);
+                };
+
+                // First run against an empty database: hand over whatever this
+                // browser already had, so nothing built up before the server
+                // existed is lost.
+                const bootstrap = async () => {
+                    const state = await (await fetch('/api/state', { cache: 'no-store' })).json();
+                    if (state.rev !== 0) {
+                        SYNC.rev = state.rev;
+                        return state.collections;
+                    }
+
+                    const ops = Object.keys(STORAGE).map((name) => ({
+                        collection: name,
+                        replace: true,
+                        upsert: loadJSON(STORAGE[name], [])
+                    }));
+                    const res = await fetch('/api/seed', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ops })
+                    });
+                    if (res.status === 409) {
+                        // Another device seeded first — take its data instead.
+                        const fresh = await (await fetch('/api/state', { cache: 'no-store' })).json();
+                        SYNC.rev = fresh.rev;
+                        return fresh.collections;
+                    }
+                    if (!res.ok) throw new Error(`seed failed (${res.status})`);
+                    SYNC.rev = (await res.json()).rev;
+                    return null;
+                };
+
+                const pull = async () => {
+                    try {
+                        const { rev } = await (await fetch('/api/rev', { cache: 'no-store' })).json();
+                        // A batch can fail without the revision moving, so push any
+                        // leftover work before deciding whether anything new arrived.
+                        if (SYNC.pending.size > 0) await syncFlush();
+                        if (rev !== SYNC.rev) {
+                            const state = await (await fetch('/api/state', { cache: 'no-store' })).json();
+                            SYNC.rev = state.rev;
+                            applyServerState(state.collections);
+                        }
+                        // Stay "offline" while work is still waiting to be accepted.
+                        if (SYNC.pending.size === 0) syncSetOnline(true);
+                    } catch (err) {
+                        syncSetOnline(false);
+                    }
+                };
+
+                bootstrap()
+                    .then((collections) => {
+                        if (collections) applyServerState(collections);
+                        syncSetOnline(true);
+                    })
+                    .catch(() => syncSetOnline(false));
+
+                const timer = setInterval(pull, 3000);
+                const onWake = () => { if (document.visibilityState === 'visible') pull(); };
+                document.addEventListener('visibilitychange', onWake);
+                window.addEventListener('focus', onWake);
+
+                return () => {
+                    cancelled = true;
+                    clearInterval(timer);
+                    document.removeEventListener('visibilitychange', onWake);
+                    window.removeEventListener('focus', onWake);
+                    SYNC.listeners.delete(listener);
+                };
+            }, []);
+
+            /* ------------------ expiring change requests ------------------
+             * A request the employee never answers must not block the
+             * booking forever, so it lapses after two days.
+             */
+            useEffect(() => {
+                const expireStale = () => {
+                    const now = Date.now();
+                    const stale = changeRequests.filter((r) => r.status === 'pending'
+                        && now - new Date(r.requestedAt).getTime() > CHANGE_REQUEST_TTL);
+                    if (!stale.length) return;
+
+                    const ids = new Set(stale.map((r) => r.id));
+                    setChangeRequests((prev) => prev.map((r) => (ids.has(r.id)
+                        ? { ...r, status: 'expired', decidedAt: new Date().toISOString(), decidedBy: 'system' }
+                        : r)));
+                    stale.forEach((r) => notify(
+                        r.requestedBy,
+                        'Request expired',
+                        r.direction === 'employee'
+                            ? `Nobody answered your change request for the ${r.snapshot.type} booking on ${r.snapshot.date} at ${formatTime12h(r.snapshot.time)} within 48 hours, so the booking stays as it is.`
+                            : `${r.snapshot.employeeName || 'The employee'} did not answer your ${r.kind} request for the ${r.snapshot.type} booking on ${r.snapshot.date} at ${formatTime12h(r.snapshot.time)} within 48 hours.`,
+                        { kind: 'decision', requestId: r.id, bookingId: r.bookingId }
+                    ));
+                    logAudit('request.expired', `${stale.length} request(s)`, 'No employee answer within 48 hours');
+                };
+
+                expireStale();
+                const timer = setInterval(expireStale, 60000);
+                return () => clearInterval(timer);
+            }, [changeRequests]);
 
             /* ------------------ toasts ------------------ */
             const pushToast = (text, type = 'info') => {
@@ -1621,12 +2642,76 @@
             // Styled replacement for window.confirm(); the action runs only on Confirm.
             const requestConfirm = (message, onConfirm) => setConfirmRequest({ message, onConfirm });
 
-            const refreshData = () => {
-                setBookings(loadJSON(STORAGE.bookings, []));
-                setCustomUsers(loadJSON(STORAGE.users, []));
-                setRemovedUsers(loadJSON(STORAGE.removedUsers, []));
-                setBuses(loadJSON(STORAGE.buses, DEFAULT_BUSES));
-                pushToast('Data refreshed successfully', 'success');
+            /* ------------------ audit trail ------------------
+             * A short, append-only record of who changed what, so a booking
+             * that moved can always be explained afterwards.
+             */
+            const logAudit = (action, target, details = '') => {
+                setAuditLog((prev) => [...prev, {
+                    id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                    actor: currentUser ? currentUser.username : 'system',
+                    actorName: currentUser ? (currentUser.name || currentUser.username) : 'System',
+                    actorRole: currentUser ? roleOf(currentUser) : 'system',
+                    action,
+                    target,
+                    details,
+                    at: new Date().toISOString()
+                }].slice(-400));
+            };
+
+            /* ------------------ notifications ------------------ */
+            const notify = (to, title, body, extra = {}) => {
+                const entry = {
+                    id: `ntf-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                    to,
+                    title,
+                    body,
+                    createdAt: new Date().toISOString(),
+                    read: false,
+                    handled: false,
+                    ...extra
+                };
+                // Keeps the list from growing without bound in localStorage.
+                setNotifications((prev) => [...prev, entry].slice(-120));
+                return entry;
+            };
+
+            // Anything an employee does to their own booking is worth telling the
+            // team leaders about, so a freed seat is noticed straight away.
+            const notifyLeaders = (title, message, extra = {}) => {
+                teamLeaders.forEach((lead) => notify(lead.username, title, message, extra));
+            };
+
+            const myNotifications = useMemo(
+                () => notifications.filter((n) => currentUser && n.to === currentUser.username),
+                [notifications, currentUser]
+            );
+
+            // Bulk re-distribution applies immediately (no approval) but the affected
+            // employees are still told that their bus changed.
+            const notifyBusChanges = (before, after) => {
+                const previous = new Map(before.map((b) => [b.id, b.bus]));
+                after.forEach((b) => {
+                    const was = previous.get(b.id);
+                    if (was === b.bus) return;
+                    notify(
+                        b.employeeId,
+                        'Bus changed',
+                        `Your bus for the ${b.type} booking on ${b.date} at ${formatTime12h(b.time)} changed from ${was || '—'} to ${b.bus}.`,
+                        { kind: 'info', bookingId: b.id }
+                    );
+                });
+            };
+
+            const openBell = () => {
+                setBellOpen(true);
+                setNotifications((prev) => prev.map((n) => {
+                    if (!currentUser || n.to !== currentUser.username) return n;
+                    // A pending approval stays unread so its badge is still visible until decided.
+                    const awaitingDecision = n.kind === 'approval'
+                        && changeRequests.some((r) => r.id === n.requestId && r.status === 'pending');
+                    return awaitingDecision ? n : { ...n, read: true };
+                }));
             };
 
             /* ------------------ auth ------------------ */
@@ -1640,6 +2725,12 @@
                     .filter((u) => !overridden.has(u.username) && !removed.has(u.username))
                     .concat(customUsers.filter((u) => !removed.has(u.username)));
             }, [customUsers, removedUsers]);
+
+            // Last-minute edits are routed to the team leaders, so they are resolved by name.
+            const teamLeaders = useMemo(
+                () => allUsers.filter((u) => roleOf(u) === 'teamlead'),
+                [allUsers]
+            );
 
             const handleLogin = async (e) => {
                 e.preventDefault();
@@ -1656,6 +2747,7 @@
                 const ok = match ? await verifyPassword(loginData.password, match) : false;
 
                 if (!ok) {
+                    setLoginNotice('');
                     setError('Invalid username or password');
                     return;
                 }
@@ -1668,23 +2760,61 @@
                     setCustomUsers((prev) => prev.map((u) => (u.username === user.username ? user : u)));
                 }
 
+                // A temporary password that was never replaced in time is no longer valid.
+                if (user.mustChangePassword && user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < Date.now()) {
+                    setError('This temporary password has expired. Please request a new one.');
+                    return;
+                }
+
                 setIsLoggedIn(true);
                 setCurrentUser(user);
                 setError('');
+                setLoginNotice('');
                 setLoginData({ username: '', password: '' });
             };
 
-            /* ------------------ forced password change ------------------ */
-            const handleChangePassword = async (e) => {
-                e.preventDefault();
-                const { current, next, confirm } = pwdForm;
-
-                if (!current || !next || !confirm) {
-                    setPwdFeedback({ type: 'error', text: 'Please fill in all three fields.' });
+            /* ------------------ forgot password ------------------ */
+            const handleForgotPassword = () => {
+                const username = loginData.username.trim();
+                if (!username) {
+                    setLoginNotice('Type your username above, then press "Forgot password".');
                     return;
                 }
-                if (!(await verifyPassword(current, currentUser))) {
-                    setPwdFeedback({ type: 'error', text: 'The current password is not correct.' });
+
+                const account = allUsers.find((u) => u.username === username);
+                const alreadyOpen = passwordRequests.some((r) => r.status === 'open' && r.username === username);
+
+                // The message never reveals whether the username exists.
+                if (account && !alreadyOpen) {
+                    setPasswordRequests((prev) => [
+                        ...prev,
+                        {
+                            id: `req-${Date.now()}`,
+                            username: account.username,
+                            name: account.name,
+                            requestedAt: new Date().toISOString(),
+                            status: 'open',
+                            resolvedAt: null,
+                            resolvedBy: null
+                        }
+                    ]);
+                }
+
+                setError('');
+                // The same neutral answer is shown either way, so the screen never
+                // reveals whether a username exists or was already requested.
+                setLoginNotice('If the account exists, a reset request was sent to the administrator.');
+            };
+
+            /* ------------------ forced password change ------------------ */
+            // The account is already authenticated, so only the new password is asked for —
+            // the temporary password does not have to be typed again.
+            const handleChangePassword = async (e) => {
+                e.preventDefault();
+                const { next, confirm } = pwdForm;
+
+                if (!next || !confirm) {
+                    setPwdFeedback({ type: 'error', text: 'Please fill in both fields.' });
                     return;
                 }
                 if (next.length < 6) {
@@ -1702,13 +2832,83 @@
                     return;
                 }
                 delete updated.mustChangePassword;
+                delete updated.tempPasswordExpiresAt;
 
                 // Upsert: this also overrides a built-in account with the stored copy.
                 setCustomUsers((prev) => [...prev.filter((u) => u.username !== updated.username), updated]);
                 setCurrentUser(updated);
-                setPwdForm({ current: '', next: '', confirm: '' });
+                setPwdForm({ next: '', confirm: '' });
                 setPwdFeedback({ type: '', text: '' });
                 pushToast('Your password has been updated.', 'success');
+            };
+
+            /* ------------------ admin: password reset ------------------ */
+            const openRequests = useMemo(
+                () => passwordRequests.filter((r) => r.status === 'open'),
+                [passwordRequests]
+            );
+
+            // Change requests still waiting for an employee answer.
+            const pendingChangeCount = useMemo(
+                () => changeRequests.filter((r) => r.status === 'pending').length,
+                [changeRequests]
+            );
+
+            const handleResetPassword = async (requestId) => {
+                const request = openRequests.find((r) => r.id === requestId);
+                if (!request) return;
+
+                const account = allUsers.find((u) => u.username === request.username);
+                if (!account) {
+                    pushToast(`The account "${request.username}" no longer exists.`, 'error');
+                    setPasswordRequests((prev) => prev.map((r) => (
+                        r.id === requestId ? { ...r, status: 'resolved', resolvedAt: new Date().toISOString(), resolvedBy: currentUser.username } : r
+                    )));
+                    return;
+                }
+
+                const temporaryPassword = generateTempPassword();
+                const updated = await withHashedPassword({ ...account, password: temporaryPassword });
+                if (!isHashed(updated)) {
+                    pushToast('A secure connection (https or localhost) is required for this action.', 'error');
+                    return;
+                }
+                updated.mustChangePassword = true;
+                updated.tempPasswordExpiresAt = Date.now() + TEMP_PASSWORD_TTL;
+
+                setCustomUsers((prev) => [...prev.filter((u) => u.username !== updated.username), updated]);
+                setRemovedUsers((prev) => prev.filter((u) => u !== updated.username));
+                setPasswordRequests((prev) => prev.map((r) => (
+                    r.id === requestId ? { ...r, status: 'resolved', resolvedAt: new Date().toISOString(), resolvedBy: currentUser.username } : r
+                )));
+                // Shown to the admin once; only the hash is kept afterwards.
+                setTempPasswordReveal({
+                    name: account.name,
+                    username: account.username,
+                    password: temporaryPassword,
+                    expiresAt: updated.tempPasswordExpiresAt
+                });
+                logAudit('user.password_reset', account.username, 'Temporary password issued, valid for 24 hours');
+            };
+
+            const handleDismissRequest = (requestId) => {
+                const request = openRequests.find((r) => r.id === requestId);
+                if (!request) return;
+                requestConfirm(`Discard the password reset request from "${request.name}"?`, () => {
+                    setPasswordRequests((prev) => prev.map((r) => (
+                        r.id === requestId ? { ...r, status: 'dismissed', resolvedAt: new Date().toISOString(), resolvedBy: currentUser.username } : r
+                    )));
+                    pushToast('Request discarded.', 'success');
+                });
+            };
+
+            const handleCopyTempPassword = async () => {
+                try {
+                    await navigator.clipboard.writeText(tempPasswordReveal.password);
+                    pushToast('Temporary password copied.', 'success');
+                } catch (err) {
+                    pushToast('Copy failed — please select the password manually.', 'error');
+                }
             };
 
             const handleSignOut = () => {
@@ -1716,8 +2916,9 @@
                 setCurrentUser(null);
                 setAdminView('bookings');
                 setActiveTab('arrival');
-                setPwdForm({ current: '', next: '', confirm: '' });
+                setPwdForm({ next: '', confirm: '' });
                 setPwdFeedback({ type: '', text: '' });
+                setLoginNotice('');
             };
 
             /* ------------------ booking ------------------ */
@@ -1763,6 +2964,7 @@
                 const booking = { ...base, bus: assignBus(base, bookings, buses) };
 
                 setBookings((prev) => [...prev, booking]);
+                logAudit('booking.create', `${employeeName} — ${date} ${formatTime12h(time)}`, `${type} booking, bus ${booking.bus}`);
                 pushToast(`Booking confirmed for ${employeeName} — ${date} at ${time} (${booking.bus}).`, 'success');
                 setFormData((prev) => ({ ...prev, dropOffLocation: '', time: '' }));
                 setSelectedRoad(null);
@@ -1777,6 +2979,16 @@
             const currentRole = roleOf(currentUser);
             const isAdmin = currentRole === 'admin';
             const isTeamLead = currentRole === 'teamlead';
+
+            // Where the sheet stands: draft, sent to the admin, or locked once the
+            // admin has printed it and the buses have been ordered from the vendor.
+            const sheet = sheetState[0] || { status: 'draft' };
+            const sheetStatus = SHEET_STATUS[sheet.status] ? sheet.status : 'draft';
+            const sheetLocked = sheetStatus === 'locked';
+            const setSheetStatus = (status) => {
+                const who = currentUser.name || currentUser.username;
+                setSheetState([{ id: 'sheet', status, updatedAt: new Date().toISOString(), updatedBy: who }]);
+            };
 
             // A booking only reaches the admin after a team leader has forwarded it.
             const reviewBookings = useMemo(
@@ -1899,16 +3111,39 @@
                     win.print();
                     setTimeout(dropFrame, 1500);
                 }, 300);
+
+                // Printing is the admin's final confirmation: the vendors are
+                // ordering buses off this sheet, so it is locked afterwards.
+                if (sheetStatus !== 'locked') {
+                    setSheetStatus('locked');
+                    logAudit('sheet.printed', `${filteredBookings.length} booking(s)`, `Printed and locked by ${currentUser.name || currentUser.username}`);
+                    notifyLeaders(
+                        'Sheet printed and locked',
+                        `${currentUser.name || currentUser.username} (Admin) printed the booking sheet. It is now locked — ask the admin to send it back before making further changes.`,
+                        { kind: 'info' }
+                    );
+                }
             };
 
+            /* ------------------ bookings: employee actions ------------------ */
             const handleDeleteBooking = (id) => {
                 const target = bookings.find((b) => b.id === id);
                 if (!target) return;
 
-                // Security check: admins and team leaders manage every booking; regular users only their own.
-                const role = roleOf(currentUser);
-                if (role === 'user' && target.employeeId !== currentUser.username) {
+                // Employees manage their own bookings only; the team leader goes through a request.
+                if (target.employeeId !== currentUser.username) {
                     pushToast('You can only delete your own bookings.', 'error');
+                    return;
+                }
+                if (findPendingChange(target.id)) {
+                    pushToast('A change for this booking is already waiting for approval.', 'error');
+                    return;
+                }
+
+                if (needsLeaderApproval(target)) {
+                    createEmployeeRequest(target, 'delete', [
+                        { field: 'deleted', label: 'Booking', from: 'Active', to: 'Cancelled' }
+                    ]);
                     return;
                 }
 
@@ -1919,6 +3154,13 @@
                         const next = redistribute(remaining, buses);
                         const promoted = countPromotions(remaining, next);
                         setBookings(next);
+                        notifyBusChanges(remaining, next);
+                        logAudit('booking.delete', `${target.employeeName || target.employeeId} — ${target.date} ${formatTime12h(target.time)}`, 'Deleted by the employee');
+                        notifyLeaders(
+                            'Booking cancelled',
+                            `${target.employeeName || target.employeeId} cancelled their ${target.type} booking on ${target.date} at ${formatTime12h(target.time)} — the seat is free.`,
+                            { kind: 'info', bookingId: target.id }
+                        );
                         pushToast(
                             promoted
                                 ? `Booking deleted. ${promoted} waitlisted employee(s) moved to a bus.`
@@ -1929,9 +3171,330 @@
                 );
             };
 
-            const handleSetBus = (id, busName) => {
-                setBookings((prev) => prev.map((b) => (b.id === id ? { ...b, bus: busName, busManual: true } : b)));
-                pushToast(`Bus updated to ${busName}.`, 'success');
+            /* ------------------ bookings: employee edits ------------------
+             * A booking can be corrected instead of deleted and recreated.
+             * More than an hour before the pickup the employee fixes it
+             * outright; any later and the team leader has to approve it.
+             * The same one-hour rule guards cancellation, so the two paths
+             * can never disagree about what counts as "too late".
+             */
+            const openEditBooking = (booking) => {
+                if (booking.employeeId !== currentUser.username) {
+                    pushToast('You can only edit your own bookings.', 'error');
+                    return;
+                }
+                if (findPendingChange(booking.id)) {
+                    pushToast('A change for this booking is already waiting for approval.', 'error');
+                    return;
+                }
+                setEditingBooking(booking);
+            };
+
+            // Only the fields the employee actually touched, so the team leader
+            // sees exactly what is being asked for.
+            const bookingDiff = (booking, next) => {
+                const diffs = [];
+                if (next.type !== booking.type) diffs.push({ field: 'type', label: 'Direction', from: booking.type, to: next.type });
+                if (next.date !== booking.date) diffs.push({ field: 'date', label: 'Date', from: booking.date, to: next.date });
+                if (next.time !== booking.time) diffs.push({ field: 'time', label: 'Time', from: booking.time, to: next.time });
+                if (next.location !== (booking.location || '')) diffs.push({ field: 'location', label: 'Location', from: booking.location, to: next.location });
+                return diffs;
+            };
+
+            // The employee asking for something they are no longer allowed to do
+            // themselves. Mirrors the team leader's request, one direction over.
+            const createEmployeeRequest = (booking, kind, changes) => {
+                const request = {
+                    id: `chg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                    bookingId: booking.id,
+                    direction: 'employee',
+                    kind,
+                    changes,
+                    snapshot: {
+                        employeeName: booking.employeeName,
+                        date: booking.date,
+                        time: booking.time,
+                        type: booking.type,
+                        location: booking.location,
+                        bus: booking.bus
+                    },
+                    requestedBy: currentUser.username,
+                    requestedByName: currentUser.name || currentUser.username,
+                    requestedAt: new Date().toISOString(),
+                    status: 'pending',
+                    decidedAt: null,
+                    decidedBy: null
+                };
+                setChangeRequests((prev) => [...prev, request]);
+                logAudit(
+                    kind === 'delete' ? 'request.employee_delete' : 'request.employee_edit',
+                    `${booking.employeeName || booking.employeeId} — ${booking.date} ${formatTime12h(booking.time)}`,
+                    `${request.requestedByName} asked for a last-minute ${kind === 'delete' ? 'cancellation' : 'change'} of their own booking`
+                );
+                notifyLeaders(
+                    kind === 'delete' ? 'Cancellation request' : 'Booking change request',
+                    `${request.requestedByName} needs to ${kind === 'delete' ? `cancel their ${booking.type} booking` : `change their ${booking.type} booking`} on ${booking.date} at ${formatTime12h(booking.time)} — less than an hour is left. Open your notifications to approve or decline.`,
+                    { kind: 'approval', requestId: request.id, bookingId: booking.id }
+                );
+                pushToast('Request sent to your team leader for approval.', 'success');
+            };
+
+            const handleEditBooking = (next) => {
+                const booking = editingBooking;
+                setEditingBooking(null);
+                if (!booking) return;
+
+                const diffs = bookingDiff(booking, next);
+                if (!diffs.length) {
+                    pushToast('Nothing was changed.', 'error');
+                    return;
+                }
+
+                // One booking per day stays the rule, even when the day moves.
+                const sameDay = bookings.some((b) => (
+                    b.id !== booking.id && b.employeeId === booking.employeeId && b.date === next.date
+                ));
+                if (sameDay) {
+                    pushToast('You already have a booking on that day.', 'error');
+                    return;
+                }
+
+                if (needsLeaderApproval(booking, next)) {
+                    createEmployeeRequest(booking, 'update', diffs);
+                    return;
+                }
+
+                // The bus is kept: it is the rented vehicle the employee already has.
+                setBookings((prev) => prev.map((b) => (b.id === booking.id ? { ...b, ...next } : b)));
+                logAudit(
+                    'booking.edit',
+                    `${booking.employeeName || booking.employeeId} — ${next.date} ${formatTime12h(next.time)}`,
+                    `Edited by the employee, bus ${booking.bus} kept`
+                );
+                notifyLeaders(
+                    'Booking changed',
+                    `${booking.employeeName || booking.employeeId} changed their ${next.type} booking from ${booking.date} ${formatTime12h(booking.time)} to ${next.date} ${formatTime12h(next.time)}.`,
+                    { kind: 'info', bookingId: booking.id }
+                );
+                pushToast('Booking updated.', 'success');
+            };
+
+            /* ------------------ team leader: change requests ------------------ */
+            // Nothing the team leader changes takes effect until the employee approves it.
+            const findPendingChange = (bookingId) => changeRequests.find(
+                (r) => r.bookingId === bookingId && r.status === 'pending'
+            );
+
+            const createChangeRequest = (booking, kind, changes, summary) => {
+                // Managing bookings is the team leader's job; the admin only prints and exports.
+                if (!isTeamLead) {
+                    pushToast('Only a team leader can request booking changes.', 'error');
+                    return;
+                }
+                if (findPendingChange(booking.id)) {
+                    pushToast('A change for this booking is already waiting for the employee.', 'error');
+                    return;
+                }
+
+                const request = {
+                    id: `chg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                    bookingId: booking.id,
+                    kind,
+                    changes,
+                    snapshot: {
+                        employeeName: booking.employeeName,
+                        date: booking.date,
+                        time: booking.time,
+                        type: booking.type,
+                        location: booking.location,
+                        bus: booking.bus
+                    },
+                    requestedBy: currentUser.username,
+                    requestedByName: currentUser.name || currentUser.username,
+                    requestedAt: new Date().toISOString(),
+                    status: 'pending',
+                    decidedAt: null,
+                    decidedBy: null
+                };
+
+                setChangeRequests((prev) => [...prev, request]);
+                logAudit(
+                    kind === 'delete' ? 'request.delete' : 'request.update',
+                    `${booking.employeeName || booking.employeeId} — ${booking.date} ${formatTime12h(booking.time)}`,
+                    `${request.requestedByName} asked the employee to ${summary}`
+                );
+                notify(
+                    booking.employeeId,
+                    kind === 'delete' ? 'Deletion request' : 'Change request',
+                    `${request.requestedByName} (Team Leader) wants to ${summary} for your ${booking.type} booking on ${booking.date} at ${formatTime12h(booking.time)}. Open your notifications to approve or decline.`,
+                    { kind: 'approval', requestId: request.id, bookingId: booking.id }
+                );
+                pushToast('Request sent to the employee for approval.', 'success');
+            };
+
+            const handleRequestBusChange = (id, busName) => {
+                const booking = bookings.find((b) => b.id === id);
+                if (!booking || booking.bus === busName) return;
+                createChangeRequest(
+                    booking,
+                    'update',
+                    [{ field: 'bus', label: 'Bus', from: booking.bus, to: busName }],
+                    `change the bus from ${booking.bus} to ${busName}`
+                );
+            };
+
+            const handleRequestBookingDelete = (id) => {
+                const booking = bookings.find((b) => b.id === id);
+                if (!booking) return;
+
+                requestConfirm(
+                    `Ask ${booking.employeeName || 'this employee'} to approve deleting their booking on ${booking.date}? The booking is only removed once they approve.`,
+                    () => createChangeRequest(
+                        booking,
+                        'delete',
+                        [{ field: 'deleted', label: 'Booking', from: 'Active', to: 'Deleted' }],
+                        'delete it'
+                    )
+                );
+            };
+
+            // Runs as the employee: the change is applied here and the team leader is told the outcome.
+            const decideChangeRequest = (requestId, approved) => {
+                const request = changeRequests.find((r) => r.id === requestId);
+                if (!request || request.status !== 'pending') {
+                    pushToast('This request has already been handled.', 'error');
+                    return;
+                }
+                // Only the employee whose booking is affected may approve it.
+                if (request.requestedBy === currentUser.username) {
+                    pushToast('You cannot approve your own request.', 'error');
+                    return;
+                }
+                // A last-minute edit asked for by an employee is the team leader's call.
+                if (request.direction === 'employee' && !isTeamLead) {
+                    pushToast('Only a team leader can answer this request.', 'error');
+                    return;
+                }
+
+                const booking = bookings.find((b) => b.id === request.bookingId);
+
+                if (approved && booking) {
+                    if (request.kind === 'delete') {
+                        const remaining = bookings.filter((b) => b.id !== booking.id);
+                        const next = redistribute(remaining, buses);
+                        const promoted = countPromotions(remaining, next);
+                        setBookings(next);
+                        notifyBusChanges(remaining, next);
+                        if (promoted) pushToast(`${promoted} waitlisted employee(s) moved to a bus.`, 'success');
+                    } else {
+                        const patch = {};
+                        request.changes.forEach((c) => { patch[c.field] = c.to; });
+                        setBookings((prev) => prev.map((b) => {
+                            if (b.id !== booking.id) return b;
+                            // The employee keeps their rented bus; only a leader's
+                            // bus change is pinned as a manual assignment.
+                            return request.direction === 'employee'
+                                ? { ...b, ...patch }
+                                : { ...b, ...patch, busManual: true };
+                        }));
+                    }
+                }
+
+                setChangeRequests((prev) => prev.map((r) => (
+                    r.id === requestId
+                        ? { ...r, status: approved ? 'approved' : 'rejected', decidedAt: new Date().toISOString(), decidedBy: currentUser.name || currentUser.username }
+                        : r
+                )));
+
+                // The employee's own approval notification is done with.
+                setNotifications((prev) => prev.map((n) => (
+                    n.requestId === requestId ? { ...n, handled: true, read: true } : n
+                )));
+
+                notify(
+                    request.requestedBy,
+                    approved ? 'Change approved' : 'Change declined',
+                    request.direction === 'employee'
+                        ? `${currentUser.name || currentUser.username} (Team Leader) ${approved ? 'approved' : 'declined'} the change to your ${request.snapshot.type} booking on ${request.snapshot.date} at ${formatTime12h(request.snapshot.time)}.`
+                        : `${currentUser.name || currentUser.username} ${approved ? 'approved' : 'declined'} your request for their ${request.snapshot.type} booking on ${request.snapshot.date} at ${formatTime12h(request.snapshot.time)}.`,
+                    { kind: 'decision', requestId, bookingId: request.bookingId }
+                );
+
+                logAudit(
+                    approved ? 'request.approved' : 'request.rejected',
+                    `${request.snapshot.employeeName || request.bookingId} — ${request.snapshot.date} ${formatTime12h(request.snapshot.time)}`,
+                    request.direction === 'employee'
+                        ? `${currentUser.name || currentUser.username} answered ${request.requestedByName}'s own edit request`
+                        : `${currentUser.name || currentUser.username} answered ${request.requestedByName}'s ${request.kind} request`
+                );
+
+                pushToast(approved ? 'Change approved and applied.' : 'Change declined.', approved ? 'success' : 'error');
+            };
+
+            // The team leader's emergency path: apply their own pending request right
+            // away instead of waiting for the employee, with a reason left on record
+            // and the employee told exactly what happened and why.
+            const handleOverrideRequest = (requestId, reason) => {
+                if (!isTeamLead) {
+                    pushToast('Only a team leader can override a request.', 'error');
+                    return;
+                }
+                const request = changeRequests.find((r) => r.id === requestId);
+                if (!request || request.status !== 'pending') {
+                    pushToast('This request has already been handled.', 'error');
+                    return;
+                }
+                if (request.direction === 'employee') {
+                    pushToast("An employee's own request cannot be overridden — answer it instead.", 'error');
+                    return;
+                }
+                const booking = bookings.find((b) => b.id === request.bookingId);
+                if (!booking) {
+                    pushToast('The booking no longer exists.', 'error');
+                    return;
+                }
+
+                if (request.kind === 'delete') {
+                    const remaining = bookings.filter((b) => b.id !== booking.id);
+                    const next = redistribute(remaining, buses);
+                    const promoted = countPromotions(remaining, next);
+                    setBookings(next);
+                    notifyBusChanges(remaining, next);
+                    if (promoted) pushToast(`${promoted} waitlisted employee(s) moved to a bus.`, 'success');
+                } else {
+                    const patch = {};
+                    request.changes.forEach((c) => { patch[c.field] = c.to; });
+                    setBookings((prev) => prev.map((b) => (
+                        b.id === booking.id ? { ...b, ...patch, busManual: true } : b
+                    )));
+                }
+
+                const decidedBy = currentUser.name || currentUser.username;
+                setChangeRequests((prev) => prev.map((r) => (
+                    r.id === requestId
+                        ? { ...r, status: 'overridden', overrideReason: reason, decidedAt: new Date().toISOString(), decidedBy }
+                        : r
+                )));
+
+                // The employee's approval notification is now moot.
+                setNotifications((prev) => prev.map((n) => (
+                    n.requestId === requestId ? { ...n, handled: true, read: true } : n
+                )));
+
+                notify(
+                    booking.employeeId,
+                    'Booking changed by override',
+                    `${decidedBy} (Team Leader) applied the change to your ${request.snapshot.type} booking on ${request.snapshot.date} at ${formatTime12h(request.snapshot.time)} without waiting for approval. Reason: ${reason}`,
+                    { kind: 'decision', requestId, bookingId: booking.id }
+                );
+
+                logAudit(
+                    'request.override',
+                    `${request.snapshot.employeeName || booking.employeeId} — ${request.snapshot.date} ${formatTime12h(request.snapshot.time)}`,
+                    `Emergency override by ${decidedBy} — ${reason}`
+                );
+
+                pushToast('Override applied and the employee was notified.', 'success');
             };
 
             // A freed seat should be taken by whoever is on the waitlist for that day.
@@ -1949,6 +3512,7 @@
                 const promoted = countPromotions(nextBookings, redistributed);
                 setBuses(nextBuses);
                 setBookings(redistributed);
+                notifyBusChanges(nextBookings, redistributed);
                 if (promoted) pushToast(`${promoted} waitlisted employee(s) moved to a bus.`, 'success');
                 else if (emptyMessage) pushToast(emptyMessage, 'success');
             };
@@ -1959,12 +3523,19 @@
                     return;
                 }
                 applyDistribution(bookings, buses, 'Buses re-distributed automatically (manual assignments kept).');
+                logAudit('buses.redistribute', `${bookings.length} booking(s)`, 'Automatic bus assignment run');
             };
 
             const resetFilters = () => setFilters({ q: '', from: '', to: '' });
 
             /* ------------------ team leader: forward bookings to the admin ------------------ */
             const handleSubmitToAdmin = () => {
+                // Once the admin has printed the sheet the buses are already
+                // ordered, so it cannot be replaced until it is sent back.
+                if (sheetLocked) {
+                    pushToast('This sheet was printed and locked. Ask the admin to send it back before sending again.', 'error');
+                    return;
+                }
                 if (!filteredBookings.length) {
                     pushToast('There are no bookings to send.', 'error');
                     return;
@@ -1976,7 +3547,21 @@
                 setBookings((prev) => prev.map((b) => (
                     ids.has(b.id) ? { ...b, submittedBy, submittedAt } : b
                 )));
+                setSheetStatus('sent');
+                logAudit('bookings.send_to_admin', `${ids.size} booking(s)`, `Sent by ${submittedBy}`);
                 pushToast(`${ids.size} booking(s) sent to the admin for final confirmation.`, 'success');
+            };
+
+            // The admin hands the sheet back so the team leader can work on it again.
+            const handleSendBackToLeader = () => {
+                setSheetStatus('draft');
+                logAudit('sheet.send_back', 'Booking sheet', `Sent back to the team leader by ${currentUser.name || currentUser.username}`);
+                notifyLeaders(
+                    'Sheet sent back',
+                    `${currentUser.name || currentUser.username} (Admin) sent the booking sheet back for changes. You can edit and send it again.`,
+                    { kind: 'info' }
+                );
+                pushToast('The sheet was sent back to the team leader.', 'success');
             };
 
             /* ------------------ admin: buses ------------------ */
@@ -1996,6 +3581,7 @@
 
                 const nextBuses = [...buses, { id: `bus-${Date.now()}`, name, capacity }];
                 applyDistribution(bookings, nextBuses, null);
+                logAudit('bus.create', name, `Capacity ${capacity}`);
                 setNewBus({ name: '', capacity: '' });
                 setBusFeedback({ type: 'success', text: `Bus "${name}" was added.` });
             };
@@ -2011,6 +3597,7 @@
                             b.bus === bus.name ? { ...b, bus: WAITLIST, busManual: false } : b
                         ));
                         applyDistribution(moved, nextBuses, `Bus "${bus.name}" removed.`);
+                        logAudit('bus.delete', bus.name, 'Its bookings were re-assigned or waitlisted');
                     }
                 );
             };
@@ -2022,6 +3609,7 @@
                 if (!current || current.capacity === value) return; // nothing to re-distribute
                 const nextBuses = buses.map((b) => (b.id === id ? { ...b, capacity: value } : b));
                 applyDistribution(bookings, nextBuses, null);
+                logAudit('bus.capacity', current.name, `${current.capacity} → ${value} seats per day`);
             };
 
             /* ------------------ admin: users ------------------ */
@@ -2048,6 +3636,7 @@
                 // A name that was deleted earlier becomes available again.
                 setRemovedUsers((prev) => prev.filter((u) => u !== username));
                 setNewUser({ name: '', username: '', password: '', role: 'user' });
+                logAudit('user.create', username, `${ROLE_LABELS[role]} account created`);
                 setUserFeedback({ type: 'success', text: `${ROLE_LABELS[role]} "${username}" was created successfully.` });
             };
 
@@ -2068,6 +3657,7 @@
                             setRemovedUsers((prev) => (prev.includes(username) ? prev : [...prev, username]));
                         }
                         setUserFeedback({ type: 'success', text: `The account "${username}" was deleted.` });
+                        logAudit('user.delete', username, `Account "${target.name}" deleted; bookings kept`);
                         pushToast(`Account "${username}" deleted.`, 'success');
                     }
                 );
@@ -2081,7 +3671,12 @@
                     bookings,
                     customUsers,
                     removedUsers,
-                    buses
+                    passwordRequests,
+                    changeRequests,
+                    notifications,
+                    buses,
+                    audit: auditLog,
+                    sheet: sheetState
                 };
                 const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
@@ -2104,7 +3699,13 @@
                         if (Array.isArray(data.bookings)) setBookings(data.bookings);
                         if (Array.isArray(data.customUsers)) setCustomUsers(data.customUsers);
                         if (Array.isArray(data.removedUsers)) setRemovedUsers(data.removedUsers);
+                        if (Array.isArray(data.passwordRequests)) setPasswordRequests(data.passwordRequests);
+                        if (Array.isArray(data.changeRequests)) setChangeRequests(data.changeRequests);
+                        if (Array.isArray(data.notifications)) setNotifications(data.notifications);
                         if (Array.isArray(data.buses) && data.buses.length) setBuses(data.buses);
+                        if (Array.isArray(data.audit)) setAuditLog(data.audit);
+                        if (Array.isArray(data.sheet) && data.sheet.length) setSheetState(data.sheet);
+                        logAudit('backup.restore', file.name, 'Backup file restored');
                         pushToast('Backup restored successfully.', 'success');
                     } catch (err) {
                         pushToast('That file is not a valid Alorica backup.', 'error');
@@ -2119,32 +3720,6 @@
                 reader.readAsText(file);
             };
 
-            /* ------------------ geolocation ------------------ */
-            const getCurrentLocation = (field) => {
-                if (!navigator.geolocation) {
-                    pushToast('Geolocation is not supported by your browser.', 'error');
-                    return;
-                }
-                setLocating(true);
-                navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        const { latitude, longitude } = position.coords;
-                        setFormData((prev) => ({ ...prev, [field]: `Lat: ${latitude.toFixed(4)}, Lon: ${longitude.toFixed(4)}` }));
-                        setLocating(false);
-                        pushToast('Current location detected.', 'success');
-                    },
-                    (err) => {
-                        let msg = 'An unknown error occurred.';
-                        if (err.code === err.PERMISSION_DENIED) msg = 'Permission denied. Please enable location services.';
-                        else if (err.code === err.POSITION_UNAVAILABLE) msg = 'Location information is unavailable.';
-                        else if (err.code === err.TIMEOUT) msg = 'The request to get your location timed out.';
-                        pushToast('Location error: ' + msg, 'error');
-                        setLocating(false);
-                    },
-                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-                );
-            };
-
             /* ------------------ derived ------------------ */
             const dropOffLabel = activeTab === 'arrival' ? 'Pickup location' : 'Drop off location';
             const dropOffIcon = activeTab === 'arrival' ? 'map-pin' : 'navigation';
@@ -2154,9 +3729,11 @@
             // Team leaders only get the bookings view; fleet and user management stay with the admin.
             const adminTabs = [
                 { key: 'bookings', label: isTeamLead ? 'Review Bookings' : 'Bookings', icon: 'calendar-check' },
+                { key: 'changes', label: 'Change Requests', icon: 'git-pull-request', badge: pendingChangeCount },
                 ...(isAdmin ? [
                     { key: 'buses', label: 'Buses', icon: 'bus' },
-                    { key: 'users', label: 'Users', icon: 'users' }
+                    { key: 'users', label: 'Users', icon: 'users' },
+                    { key: 'requests', label: 'Password Requests', icon: 'key-round', badge: openRequests.length }
                 ] : [])
             ];
 
@@ -2168,7 +3745,9 @@
                         loginData={loginData}
                         setLoginData={setLoginData}
                         error={error}
+                        notice={loginNotice}
                         onSubmit={handleLogin}
+                        onForgotPassword={handleForgotPassword}
                     />
                 );
             }
@@ -2203,6 +3782,31 @@
                         }}
                     />
                 )}
+                {tempPasswordReveal && (
+                    <TempPasswordDialog
+                        reveal={tempPasswordReveal}
+                        onCopy={handleCopyTempPassword}
+                        onClose={() => setTempPasswordReveal(null)}
+                    />
+                )}
+                {editingBooking && (
+                    <EditBookingDialog
+                        booking={editingBooking}
+                        onCancel={() => setEditingBooking(null)}
+                        onSubmit={handleEditBooking}
+                    />
+                )}
+                {overrideRequest && (
+                    <OverrideDialog
+                        request={overrideRequest}
+                        onCancel={() => setOverrideRequest(null)}
+                        onConfirm={(reason) => {
+                            const id = overrideRequest.id;
+                            setOverrideRequest(null);
+                            handleOverrideRequest(id, reason);
+                        }}
+                    />
+                )}
                 <div className="min-h-screen bg-alorica-light">
                     <nav className="bg-white shadow-md px-4 sm:px-6 py-4 flex justify-between items-center sticky top-0 z-50">
                         <img src="logo.png" alt="Alorica" className="h-8" />
@@ -2211,15 +3815,23 @@
                                 <p className="text-sm font-bold text-alorica-blue">{currentUser.name}</p>
                                 <p className="text-xs text-gray-500">{isAdmin ? 'Administrator' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
                             </div>
-                            {(isAdmin || isTeamLead) && (
-                                <button
-                                    onClick={refreshData}
-                                    className="p-2 hover:bg-blue-50 rounded-full text-alorica-blue transition-colors"
-                                    title="Refresh data"
-                                >
-                                    <Icon name="refresh-cw" size={22} />
-                                </button>
-                            )}
+                            <span
+                                title={syncOnline
+                                    ? 'Connected — changes are shared with every device'
+                                    : 'Offline — changes are saved here and will sync once the server is back'}
+                                className={`hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border whitespace-nowrap ${syncOnline ? 'text-green-700 bg-green-50 border-green-100' : 'text-red-600 bg-red-50 border-red-100'}`}
+                            >
+                                <span className={`w-1.5 h-1.5 rounded-full ${syncOnline ? 'bg-green-500' : 'bg-red-500'}`} />
+                                {syncOnline ? 'Synced' : 'Offline'}
+                            </span>
+                            <NotificationBell
+                                items={myNotifications}
+                                open={bellOpen}
+                                onOpen={openBell}
+                                onClose={() => setBellOpen(false)}
+                                onDecide={decideChangeRequest}
+                                pendingRequest={(requestId) => changeRequests.find((r) => r.id === requestId && r.status === 'pending')}
+                            />
                             <button
                                 onClick={handleSignOut}
                                 className="p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
@@ -2252,8 +3864,10 @@
                             summaryText={shareSummaryText}
                             pushToast={pushToast}
                             busNames={busNames}
-                            onSetBus={handleSetBus}
-                            onDeleteBooking={handleDeleteBooking}
+                            onSetBus={handleRequestBusChange}
+                            onDeleteBooking={handleRequestBookingDelete}
+                            pendingChanges={changeRequests}
+                            auditLog={auditLog}
                             buses={buses}
                             newBus={newBus}
                             setNewBus={setNewBus}
@@ -2271,6 +3885,9 @@
                             onDeleteUser={handleDeleteUser}
                             allUsers={allUsers}
                             currentUser={currentUser}
+                            passwordRequests={passwordRequests}
+                            onResetPassword={handleResetPassword}
+                            onDismissRequest={handleDismissRequest}
                             importing={importing}
                             setImporting={setImporting}
                             onExportBackup={handleExportBackup}
@@ -2278,6 +3895,10 @@
                             role={currentRole}
                             onSubmitToAdmin={handleSubmitToAdmin}
                             pendingReviewCount={pendingReviewCount}
+                            sheetStatus={sheetStatus}
+                            sheet={sheet}
+                            onSendBack={handleSendBackToLeader}
+                            onOverrideRequest={setOverrideRequest}
                         />
                         ) : (
                         /* ================= REGULAR USER ================= */
@@ -2289,14 +3910,12 @@
                                 setFormData={setFormData}
                                 selectedRoad={selectedRoad}
                                 setSelectedRoad={setSelectedRoad}
-                                locating={locating}
-                                onLocate={getCurrentLocation}
                                 onSubmit={handleBooking}
                                 dropOffLabel={dropOffLabel}
                                 dropOffIcon={dropOffIcon}
                                 timeLabel={timeLabel}
                             />
-                            <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} />
+                            <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} />
                         </div>
                         )}
                     </main>
