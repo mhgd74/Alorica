@@ -74,13 +74,14 @@
          * 1. Configuration
          * ============================================================= */
 
-        // Built-in accounts. Kept out of the UI on purpose.
+        // Built-in accounts. Kept out of the UI on purpose, and stored as salted PBKDF2-SHA256
+        // hashes so no password is readable in the source or in localStorage.
         // role: 'admin' (full access) | 'teamlead' (review + edit bookings only) | 'user'
         const DEFAULT_USERS = [
-            { username: 'admin', password: 'admin123', name: 'System Admin', role: 'admin' },
-            { username: 'teamlead', password: 'lead123', name: 'Team Leader', role: 'teamlead' },
-            { username: '7406173', password: 'pass123', name: 'Gomaa Abdelrahman', role: 'user' },
-            { username: 'user2', password: 'pass456', name: 'Second User', role: 'user' }
+            { username: 'admin', name: 'System Admin', role: 'admin', passwordSalt: '8b036795d80f3e91a28d9a4e6df054c3', passwordHash: '7ba9a15205e600a95954ffd082fa77274aa2a6a979e5a0e63e6ca5c8a24c938b' },
+            { username: 'teamlead', name: 'Team Leader', role: 'teamlead', passwordSalt: 'c58051277c5d9074dfeff9746c355e60', passwordHash: '11ed52253410cf6bc2745869aee4d29c7b80454f9ec6a9fcb3d7b67f98a9f5d8' },
+            { username: '7406173', name: 'Gomaa Abdelrahman', role: 'user', passwordSalt: 'ace138aead5305352f5eaf89f13950c3', passwordHash: '92d22c3baba14718acbef23e5f10da00a659ea3fcc554131492f9a68881f8c3a', mustChangePassword: true },
+            { username: 'user2', name: 'Second User', role: 'user', passwordSalt: '41871c8d1e71b76f725da87a84f60e68', passwordHash: '55e1cb505c126417fc177d3a1b1298621f66f2aa994db335e7f3574983ae7861' }
         ];
 
         // Fixed pickup routes / points mapping from the provided schedule.
@@ -110,6 +111,7 @@
         const STORAGE = {
             bookings: 'alorica_bookings',
             users: 'alorica_custom_users',
+            removedUsers: 'alorica_removed_users',
             buses: 'alorica_buses'
         };
 
@@ -143,6 +145,66 @@
             } catch (e) {
                 /* storage full or unavailable */
             }
+        };
+
+        /* =============================================================
+         * 2b. Password hashing (PBKDF2-SHA256)
+         * =============================================================
+         * Passwords are never stored or compared in plain text. Accounts
+         * saved by older versions keep a plain `password` field; they are
+         * upgraded to a salted hash the next time the owner signs in.
+         */
+
+        const PBKDF2_ITERATIONS = 100000;
+        const PBKDF2_BYTES = 32;
+
+        const toHex = (buffer) =>
+            Array.from(new Uint8Array(buffer))
+                .map((b) => b.toString(16).padStart(2, '0'))
+                .join('');
+
+        const fromHex = (hex) => {
+            const bytes = new Uint8Array(hex.length / 2);
+            for (let i = 0; i < bytes.length; i += 1) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+            return bytes;
+        };
+
+        const randomSaltHex = () => {
+            const bytes = new Uint8Array(16);
+            crypto.getRandomValues(bytes);
+            return toHex(bytes);
+        };
+
+        const derivePasswordHash = async (password, saltHex) => {
+            // crypto.subtle needs a secure context (https or localhost).
+            if (!window.crypto || !crypto.subtle) return null;
+            const key = await crypto.subtle.importKey(
+                'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']
+            );
+            const bits = await crypto.subtle.deriveBits(
+                { name: 'PBKDF2', salt: fromHex(saltHex), iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+                key,
+                PBKDF2_BYTES * 8
+            );
+            return toHex(bits);
+        };
+
+        const isHashed = (user) => Boolean(user && user.passwordHash && user.passwordSalt);
+
+        const verifyPassword = async (password, user) => {
+            if (!user) return false;
+            if (!isHashed(user)) return user.password === password;
+            const hash = await derivePasswordHash(password, user.passwordSalt);
+            return Boolean(hash) && hash === user.passwordHash;
+        };
+
+        // Replaces a plain-text password with a salted hash (never keeps both).
+        const withHashedPassword = async (user) => {
+            const { password, ...rest } = user;
+            const passwordSalt = randomSaltHex();
+            const passwordHash = await derivePasswordHash(password, passwordSalt);
+            if (!passwordHash) return { ...user }; // no WebCrypto: leave the account untouched
+            return { ...rest, passwordSalt, passwordHash };
         };
 
         const pad = (n) => String(n).padStart(2, '0');
@@ -465,11 +527,25 @@
          * 6. UI atoms
          * ============================================================= */
 
+        // Icon names are kebab-case ("calendar-check") while the bundled icon map uses PascalCase.
+        const iconPascalName = (name) => String(name)
+            .split('-')
+            .filter(Boolean)
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join('');
+
+        // Icons are rendered as real React elements. Using lucide.createIcons() would swap the
+        // <i> nodes for <svg> behind React's back, so React would later fail to remove them.
         const Icon = ({ name, size = 24, className = "" }) => {
-            useEffect(() => {
-                lucide.createIcons();
-            }, [name]);
-            return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
+            const icon = lucide.icons[iconPascalName(name)];
+            if (!icon) return null;
+
+            const [, baseAttrs, children] = icon;
+            return (
+                <svg {...baseAttrs} width={size} height={size} className={className} aria-hidden="true" focusable="false">
+                    {children.map(([tag, attrs], index) => React.createElement(tag, { key: index, ...attrs }))}
+                </svg>
+            );
         };
 
         const Toasts = ({ toasts }) => {
@@ -559,6 +635,74 @@
                 </div>
             </>
         );
+
+        // Replaces the app for accounts that still carry their temporary password.
+        const PasswordChange = ({ user, form, setForm, feedback, onSubmit, onSignOut, toasts }) => {
+            const fields = [
+                { key: 'current', label: 'Current password', autoComplete: 'current-password' },
+                { key: 'next', label: 'New password', autoComplete: 'new-password' },
+                { key: 'confirm', label: 'Confirm new password', autoComplete: 'new-password' }
+            ];
+
+            return (
+                <>
+                    <Toasts toasts={toasts} />
+                    <div className="min-h-screen flex items-center justify-center p-4">
+                        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in">
+                            <div className="flex flex-col items-center mb-6">
+                                <img src="logo.png" alt="Alorica" className="h-12 mb-4" />
+                                <h1 className="text-2xl font-bold text-alorica-blue">Set a new password</h1>
+                                <p className="text-gray-500 text-sm mt-2 text-center">
+                                    {user.name}, please replace your temporary password before continuing.
+                                </p>
+                            </div>
+
+                            <form onSubmit={onSubmit} className="space-y-4">
+                                {fields.map((field) => (
+                                    <div key={field.key}>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">{field.label}</label>
+                                        <div className="relative">
+                                            <input
+                                                type="password"
+                                                required
+                                                autoComplete={field.autoComplete}
+                                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
+                                                value={form[field.key]}
+                                                onChange={(e) => setForm({ ...form, [field.key]: e.target.value })}
+                                            />
+                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                                <Icon name="lock" size={18} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {feedback.text && (
+                                    <p className={`text-sm text-center font-medium py-2 rounded-lg ${feedback.type === 'error' ? 'text-red-500 bg-red-50' : 'text-green-600 bg-green-50'}`}>
+                                        {feedback.text}
+                                    </p>
+                                )}
+
+                                <button
+                                    type="submit"
+                                    className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg shadow-lg transition-all"
+                                >
+                                    Save password
+                                </button>
+                            </form>
+
+                            <button
+                                type="button"
+                                onClick={onSignOut}
+                                className="w-full mt-3 text-sm text-gray-500 hover:text-alorica-blue font-medium transition-colors"
+                            >
+                                Sign out
+                            </button>
+                        </div>
+                    </div>
+                </>
+            );
+        };
 
         const BookingForm = ({
             activeTab, setActiveTab,
@@ -786,9 +930,9 @@
             busNames, onSetBus, onDeleteBooking,
             buses, newBus, setNewBus, busFeedback, setBusFeedback,
             onAddBus, onDeleteBus, onUpdateCapacity, busUsage,
-            newUser, setNewUser, userFeedback, setUserFeedback, onCreateUser, allUsers,
+            newUser, setNewUser, userFeedback, setUserFeedback, onCreateUser, onDeleteUser, allUsers, currentUser,
             importing, setImporting, onExportBackup, onImportBackup,
-            role, onSubmitToAdmin
+            role, onSubmitToAdmin, pendingReviewCount
         }) => {
             const isTeamLead = role === 'teamlead';
             return (
@@ -902,6 +1046,13 @@
                                 </button>
                             </div>
                         </div>
+
+                        {!isTeamLead && pendingReviewCount > 0 && (
+                            <p className="flex items-center gap-2 mt-3 text-xs font-semibold text-alorica-orange bg-orange-50 border border-orange-100 rounded-lg px-3 py-2">
+                                <Icon name="clock" size={14} />
+                                {pendingReviewCount} booking{pendingReviewCount === 1 ? '' : 's'} waiting with the team leader — they will appear here once sent.
+                            </p>
+                        )}
                     </div>
 
                     {isTeamLead ? (
@@ -982,7 +1133,11 @@
 
                     {filteredBookings.length === 0 ? (
                         <p className="text-center text-gray-400 py-12">
-                            {bookings.length === 0 ? 'No bookings yet. Employee bookings will appear here.' : 'No bookings match the current filters.'}
+                            {bookings.length === 0
+                                ? (isTeamLead
+                                    ? 'No bookings yet. Employee bookings will appear here.'
+                                    : 'No bookings have been sent by the team leader yet.')
+                                : 'No bookings match the current filters.'}
                         </p>
                     ) : (
                         <div className="space-y-8">
@@ -1264,6 +1419,7 @@
                                             <th className="text-left px-4 py-2 font-semibold">Full Name</th>
                                             <th className="text-left px-4 py-2 font-semibold">Username</th>
                                             <th className="text-left px-4 py-2 font-semibold">Role</th>
+                                            <th className="text-center px-4 py-2 font-semibold">Remove</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1279,6 +1435,20 @@
                                                     }`}>
                                                         {ROLE_LABELS[roleOf(u)]}
                                                     </span>
+                                                </td>
+                                                <td className="px-4 py-2 text-center">
+                                                    {u.username === currentUser.username ? (
+                                                        <span className="text-xs text-gray-400">Signed in</span>
+                                                    ) : (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onDeleteUser(u.username)}
+                                                            className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
+                                                            title={`Delete ${u.username}`}
+                                                        >
+                                                            <Icon name="trash-2" size={16} />
+                                                        </button>
+                                                    )}
                                                 </td>
                                             </tr>
                                         ))}
@@ -1330,6 +1500,79 @@
             );
         };
 
+        /* =============================================================
+         * Error boundary and confirmation dialog
+         * ============================================================= */
+
+        // Keeps a single failing component from blanking the whole page.
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { error: null };
+            }
+
+            static getDerivedStateFromError(error) {
+                return { error };
+            }
+
+            componentDidCatch(error) {
+                console.error('Unexpected application error:', error);
+            }
+
+            render() {
+                if (!this.state.error) return this.props.children;
+
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-alorica-light p-4">
+                        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center border border-gray-100">
+                            <img src="logo.png" alt="Alorica" className="h-10 mx-auto mb-4" />
+                            <h1 className="text-xl font-bold text-alorica-blue mb-2">Something went wrong</h1>
+                            <p className="text-gray-500 text-sm mb-6">
+                                The page hit an unexpected error. Your saved bookings are not affected — reload to continue.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => window.location.reload()}
+                                className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg shadow-lg transition-all"
+                            >
+                                Reload
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+        }
+
+        // In-app confirmation dialog (window.confirm cannot be styled).
+        const ConfirmDialog = ({ message, onConfirm, onCancel }) => (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black bg-opacity-40 p-4">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 fade-in">
+                    <div className="flex items-start gap-3">
+                        <div className="shrink-0 w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center text-alorica-orange">
+                            <Icon name="alert-triangle" size={20} />
+                        </div>
+                        <p className="text-sm text-gray-700 pt-2">{message}</p>
+                    </div>
+                    <div className="flex gap-3 mt-6">
+                        <button
+                            type="button"
+                            onClick={onCancel}
+                            className="flex-1 px-4 py-2.5 rounded-lg border border-gray-200 text-gray-600 font-semibold text-sm hover:bg-gray-50 transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onConfirm}
+                            className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 text-white font-semibold text-sm hover:bg-red-700 transition-colors"
+                        >
+                            Confirm
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+
         const App = () => {
             /* ------------------ state ------------------ */
             const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -1340,6 +1583,7 @@
             const [activeTab, setActiveTab] = useState('arrival');
             const [bookings, setBookings] = useState(() => loadJSON(STORAGE.bookings, []));
             const [customUsers, setCustomUsers] = useState(() => loadJSON(STORAGE.users, []));
+            const [removedUsers, setRemovedUsers] = useState(() => loadJSON(STORAGE.removedUsers, []));
             const [buses, setBuses] = useState(() => loadJSON(STORAGE.buses, DEFAULT_BUSES));
             const [adminView, setAdminView] = useState('bookings');
             const [newUser, setNewUser] = useState({ name: '', username: '', password: '', role: 'user' });
@@ -1351,6 +1595,9 @@
             const [filters, setFilters] = useState({ q: '', from: '', to: '' });
             const [importing, setImporting] = useState(false);
             const [selectedRoad, setSelectedRoad] = useState(null);
+            const [pwdForm, setPwdForm] = useState({ current: '', next: '', confirm: '' });
+            const [pwdFeedback, setPwdFeedback] = useState({ type: '', text: '' });
+            const [confirmRequest, setConfirmRequest] = useState(null);
 
             const [formData, setFormData] = useState({
                 dropOffLocation: '',
@@ -1361,6 +1608,7 @@
             /* ------------------ effects ------------------ */
             useEffect(() => { saveJSON(STORAGE.bookings, bookings); }, [bookings]);
             useEffect(() => { saveJSON(STORAGE.users, customUsers); }, [customUsers]);
+            useEffect(() => { saveJSON(STORAGE.removedUsers, removedUsers); }, [removedUsers]);
             useEffect(() => { saveJSON(STORAGE.buses, buses); }, [buses]);
 
             /* ------------------ toasts ------------------ */
@@ -1370,29 +1618,106 @@
                 setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
             };
 
+            // Styled replacement for window.confirm(); the action runs only on Confirm.
+            const requestConfirm = (message, onConfirm) => setConfirmRequest({ message, onConfirm });
+
             const refreshData = () => {
                 setBookings(loadJSON(STORAGE.bookings, []));
                 setCustomUsers(loadJSON(STORAGE.users, []));
+                setRemovedUsers(loadJSON(STORAGE.removedUsers, []));
                 setBuses(loadJSON(STORAGE.buses, DEFAULT_BUSES));
                 pushToast('Data refreshed successfully', 'success');
             };
 
             /* ------------------ auth ------------------ */
-            const allUsers = DEFAULT_USERS.concat(customUsers);
+            // Custom users override the built-in ones, so a built-in account whose
+            // password was changed is resolved from its stored override.
+            // Accounts the admin removed are hidden until they are created again.
+            const allUsers = useMemo(() => {
+                const removed = new Set(removedUsers);
+                const overridden = new Set(customUsers.map((u) => u.username));
+                return DEFAULT_USERS
+                    .filter((u) => !overridden.has(u.username) && !removed.has(u.username))
+                    .concat(customUsers.filter((u) => !removed.has(u.username)));
+            }, [customUsers, removedUsers]);
 
-            const handleLogin = (e) => {
+            const handleLogin = async (e) => {
                 e.preventDefault();
-                const user = allUsers.find(
-                    (u) => u.username === loginData.username.trim() && u.password === loginData.password
-                );
-                if (user) {
-                    setIsLoggedIn(true);
-                    setCurrentUser(user);
-                    setError('');
-                    setLoginData({ username: '', password: '' });
-                } else {
-                    setError('Invalid username or password');
+
+                // PBKDF2 needs the WebCrypto API, which browsers only expose over
+                // https:// or http://localhost.
+                if (!window.crypto || !crypto.subtle) {
+                    setError('Sign-in requires a secure connection — open the app on https:// or http://localhost.');
+                    return;
                 }
+
+                const username = loginData.username.trim();
+                const match = allUsers.find((u) => u.username === username);
+                const ok = match ? await verifyPassword(loginData.password, match) : false;
+
+                if (!ok) {
+                    setError('Invalid username or password');
+                    return;
+                }
+
+                let user = match;
+                // First sign-in of an account still stored with a plain-text password:
+                // replace it with a salted hash in place.
+                if (!isHashed(user)) {
+                    user = await withHashedPassword(user);
+                    setCustomUsers((prev) => prev.map((u) => (u.username === user.username ? user : u)));
+                }
+
+                setIsLoggedIn(true);
+                setCurrentUser(user);
+                setError('');
+                setLoginData({ username: '', password: '' });
+            };
+
+            /* ------------------ forced password change ------------------ */
+            const handleChangePassword = async (e) => {
+                e.preventDefault();
+                const { current, next, confirm } = pwdForm;
+
+                if (!current || !next || !confirm) {
+                    setPwdFeedback({ type: 'error', text: 'Please fill in all three fields.' });
+                    return;
+                }
+                if (!(await verifyPassword(current, currentUser))) {
+                    setPwdFeedback({ type: 'error', text: 'The current password is not correct.' });
+                    return;
+                }
+                if (next.length < 6) {
+                    setPwdFeedback({ type: 'error', text: 'The new password must be at least 6 characters long.' });
+                    return;
+                }
+                if (next !== confirm) {
+                    setPwdFeedback({ type: 'error', text: 'The two new passwords do not match.' });
+                    return;
+                }
+
+                const updated = await withHashedPassword({ ...currentUser, password: next });
+                if (!isHashed(updated)) {
+                    setPwdFeedback({ type: 'error', text: 'A secure connection (https or localhost) is required to change the password.' });
+                    return;
+                }
+                delete updated.mustChangePassword;
+
+                // Upsert: this also overrides a built-in account with the stored copy.
+                setCustomUsers((prev) => [...prev.filter((u) => u.username !== updated.username), updated]);
+                setCurrentUser(updated);
+                setPwdForm({ current: '', next: '', confirm: '' });
+                setPwdFeedback({ type: '', text: '' });
+                pushToast('Your password has been updated.', 'success');
+            };
+
+            const handleSignOut = () => {
+                setIsLoggedIn(false);
+                setCurrentUser(null);
+                setAdminView('bookings');
+                setActiveTab('arrival');
+                setPwdForm({ current: '', next: '', confirm: '' });
+                setPwdFeedback({ type: '', text: '' });
             };
 
             /* ------------------ booking ------------------ */
@@ -1449,10 +1774,21 @@
                     .sort((a, b) => new Date(b.date + ' ' + b.time) - new Date(a.date + ' ' + a.time));
             }, [bookings, currentUser]);
 
+            const currentRole = roleOf(currentUser);
+            const isAdmin = currentRole === 'admin';
+            const isTeamLead = currentRole === 'teamlead';
+
+            // A booking only reaches the admin after a team leader has forwarded it.
+            const reviewBookings = useMemo(
+                () => (isTeamLead ? bookings : bookings.filter((b) => b.submittedAt)),
+                [bookings, isTeamLead]
+            );
+            const pendingReviewCount = isTeamLead ? 0 : bookings.length - reviewBookings.length;
+
             /* ------------------ admin: bookings ------------------ */
             const filteredBookings = useMemo(() => {
                 const q = filters.q.trim().toLowerCase();
-                return bookings.filter((b) => {
+                return reviewBookings.filter((b) => {
                     const date = b.date || '';
                     if (filters.from && date < filters.from) return false;
                     if (filters.to && date > filters.to) return false;
@@ -1460,11 +1796,13 @@
                     return [b.employeeName, b.employeeId, b.location, b.bus, b.type]
                         .some((v) => String(v == null ? '' : v).toLowerCase().includes(q));
                 });
-            }, [bookings, filters]);
+            }, [reviewBookings, filters]);
 
             const dayGroups = useMemo(() => groupByDay(filteredBookings), [filteredBookings]);
             const busNames = buses.map((b) => b.name);
 
+            // Seats are physical, so the fleet panel counts every booking — the same
+            // list "Auto-assign buses" operates on, not only the forwarded ones.
             const busUsage = useMemo(() => {
                 const map = {};
                 buses.forEach((b) => { map[b.name] = 0; });
@@ -1551,10 +1889,15 @@
                 win.document.write(buildPrintHtml(filteredBookings));
                 win.document.close();
 
+                // Guarded cleanup: the frame can already be gone when the timers fire.
+                const dropFrame = () => {
+                    if (frame.parentNode) frame.parentNode.removeChild(frame);
+                };
+
                 setTimeout(() => {
                     win.focus();
                     win.print();
-                    setTimeout(() => document.body.removeChild(frame), 1500);
+                    setTimeout(dropFrame, 1500);
                 }, 300);
             };
 
@@ -1569,9 +1912,21 @@
                     return;
                 }
 
-                if (!window.confirm(`Delete the booking for ${target.employeeName || 'this employee'} on ${target.date}?`)) return;
-                setBookings((prev) => prev.filter((b) => b.id !== id));
-                pushToast('Booking deleted.', 'success');
+                requestConfirm(
+                    `Delete the booking for ${target.employeeName || 'this employee'} on ${target.date}?`,
+                    () => {
+                        const remaining = bookings.filter((b) => b.id !== id);
+                        const next = redistribute(remaining, buses);
+                        const promoted = countPromotions(remaining, next);
+                        setBookings(next);
+                        pushToast(
+                            promoted
+                                ? `Booking deleted. ${promoted} waitlisted employee(s) moved to a bus.`
+                                : 'Booking deleted.',
+                            'success'
+                        );
+                    }
+                );
             };
 
             const handleSetBus = (id, busName) => {
@@ -1579,13 +1934,31 @@
                 pushToast(`Bus updated to ${busName}.`, 'success');
             };
 
+            // A freed seat should be taken by whoever is on the waitlist for that day.
+            const countPromotions = (before, after) => {
+                const previous = new Map(before.map((b) => [b.id, b.bus]));
+                return after.filter((b) => {
+                    const was = previous.get(b.id);
+                    return (!was || was === WAITLIST) && b.bus && b.bus !== WAITLIST;
+                }).length;
+            };
+
+            // Re-assigns buses after seat availability changes, then reports who left the waitlist.
+            const applyDistribution = (nextBookings, nextBuses, emptyMessage) => {
+                const redistributed = redistribute(nextBookings, nextBuses);
+                const promoted = countPromotions(nextBookings, redistributed);
+                setBuses(nextBuses);
+                setBookings(redistributed);
+                if (promoted) pushToast(`${promoted} waitlisted employee(s) moved to a bus.`, 'success');
+                else if (emptyMessage) pushToast(emptyMessage, 'success');
+            };
+
             const handleRedistribute = () => {
                 if (!bookings.length) {
                     pushToast('There are no bookings to distribute.', 'error');
                     return;
                 }
-                setBookings((prev) => redistribute(prev, buses));
-                pushToast('Buses re-distributed automatically (manual assignments kept).', 'success');
+                applyDistribution(bookings, buses, 'Buses re-distributed automatically (manual assignments kept).');
             };
 
             const resetFilters = () => setFilters({ q: '', from: '', to: '' });
@@ -1621,7 +1994,8 @@
                     return;
                 }
 
-                setBuses((prev) => [...prev, { id: `bus-${Date.now()}`, name, capacity }]);
+                const nextBuses = [...buses, { id: `bus-${Date.now()}`, name, capacity }];
+                applyDistribution(bookings, nextBuses, null);
                 setNewBus({ name: '', capacity: '' });
                 setBusFeedback({ type: 'success', text: `Bus "${name}" was added.` });
             };
@@ -1629,20 +2003,29 @@
             const handleDeleteBus = (id) => {
                 const bus = buses.find((b) => b.id === id);
                 if (!bus) return;
-                if (!window.confirm(`Remove "${bus.name}"? Its bookings will move to "Waitlist".`)) return;
-                setBuses((prev) => prev.filter((b) => b.id !== id));
-                setBookings((prev) => prev.map((b) => (b.bus === bus.name ? { ...b, bus: WAITLIST, busManual: false } : b)));
-                pushToast(`Bus "${bus.name}" removed.`, 'success');
+                requestConfirm(
+                    `Remove "${bus.name}"? Its bookings will be re-assigned to the remaining buses or moved to the waitlist.`,
+                    () => {
+                        const nextBuses = buses.filter((b) => b.id !== id);
+                        const moved = bookings.map((b) => (
+                            b.bus === bus.name ? { ...b, bus: WAITLIST, busManual: false } : b
+                        ));
+                        applyDistribution(moved, nextBuses, `Bus "${bus.name}" removed.`);
+                    }
+                );
             };
 
             const handleUpdateCapacity = (id, capacity) => {
                 const value = parseInt(capacity, 10);
                 if (!value || value < 1) return;
-                setBuses((prev) => prev.map((b) => (b.id === id ? { ...b, capacity: value } : b)));
+                const current = buses.find((b) => b.id === id);
+                if (!current || current.capacity === value) return; // nothing to re-distribute
+                const nextBuses = buses.map((b) => (b.id === id ? { ...b, capacity: value } : b));
+                applyDistribution(bookings, nextBuses, null);
             };
 
             /* ------------------ admin: users ------------------ */
-            const handleCreateUser = (e) => {
+            const handleCreateUser = async (e) => {
                 e.preventDefault();
                 const name = newUser.name.trim();
                 const username = newUser.username.trim();
@@ -1658,9 +2041,36 @@
                 }
 
                 const role = newUser.role === 'teamlead' ? 'teamlead' : 'user';
-                setCustomUsers((prev) => [...prev, { name, username, password, role }]);
+                // Stored as a salted hash; the owner is asked to replace the temporary
+                // password the first time they sign in.
+                const created = await withHashedPassword({ name, username, password, role, mustChangePassword: true });
+                setCustomUsers((prev) => [...prev, created]);
+                // A name that was deleted earlier becomes available again.
+                setRemovedUsers((prev) => prev.filter((u) => u !== username));
                 setNewUser({ name: '', username: '', password: '', role: 'user' });
                 setUserFeedback({ type: 'success', text: `${ROLE_LABELS[role]} "${username}" was created successfully.` });
+            };
+
+            const handleDeleteUser = (username) => {
+                if (username === currentUser.username) {
+                    pushToast('You cannot delete the account you are signed in with.', 'error');
+                    return;
+                }
+                const target = allUsers.find((u) => u.username === username);
+                if (!target) return;
+
+                requestConfirm(
+                    `Delete the account "${target.name}" (${username})? Their bookings stay in the list.`,
+                    () => {
+                        setCustomUsers((prev) => prev.filter((u) => u.username !== username));
+                        // Built-in accounts live in the source, so the removal is remembered.
+                        if (DEFAULT_USERS.some((u) => u.username === username)) {
+                            setRemovedUsers((prev) => (prev.includes(username) ? prev : [...prev, username]));
+                        }
+                        setUserFeedback({ type: 'success', text: `The account "${username}" was deleted.` });
+                        pushToast(`Account "${username}" deleted.`, 'success');
+                    }
+                );
             };
 
             /* ------------------ admin: backup ------------------ */
@@ -1670,6 +2080,7 @@
                     version: 1,
                     bookings,
                     customUsers,
+                    removedUsers,
                     buses
                 };
                 const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -1692,6 +2103,7 @@
                         const data = JSON.parse(reader.result);
                         if (Array.isArray(data.bookings)) setBookings(data.bookings);
                         if (Array.isArray(data.customUsers)) setCustomUsers(data.customUsers);
+                        if (Array.isArray(data.removedUsers)) setRemovedUsers(data.removedUsers);
                         if (Array.isArray(data.buses) && data.buses.length) setBuses(data.buses);
                         pushToast('Backup restored successfully.', 'success');
                     } catch (err) {
@@ -1738,9 +2150,6 @@
             const dropOffIcon = activeTab === 'arrival' ? 'map-pin' : 'navigation';
             const timeLabel = activeTab === 'arrival' ? 'Pickup time' : 'Drop-off time';
 
-            const currentRole = roleOf(currentUser);
-            const isAdmin = currentRole === 'admin';
-            const isTeamLead = currentRole === 'teamlead';
             const filtersActive = Boolean(filters.q || filters.from || filters.to);
             // Team leaders only get the bookings view; fleet and user management stay with the admin.
             const adminTabs = [
@@ -1764,10 +2173,36 @@
                 );
             }
 
+            /* ------------------ forced password change ------------------ */
+            if (currentUser.mustChangePassword) {
+                return (
+                    <PasswordChange
+                        toasts={toasts}
+                        user={currentUser}
+                        form={pwdForm}
+                        setForm={setPwdForm}
+                        feedback={pwdFeedback}
+                        onSubmit={handleChangePassword}
+                        onSignOut={handleSignOut}
+                    />
+                );
+            }
+
             /* ------------------ main app ------------------ */
             return (
                 <>
                 <Toasts toasts={toasts} />
+                {confirmRequest && (
+                    <ConfirmDialog
+                        message={confirmRequest.message}
+                        onCancel={() => setConfirmRequest(null)}
+                        onConfirm={() => {
+                            const action = confirmRequest.onConfirm;
+                            setConfirmRequest(null);
+                            action();
+                        }}
+                    />
+                )}
                 <div className="min-h-screen bg-alorica-light">
                     <nav className="bg-white shadow-md px-4 sm:px-6 py-4 flex justify-between items-center sticky top-0 z-50">
                         <img src="logo.png" alt="Alorica" className="h-8" />
@@ -1786,7 +2221,7 @@
                                 </button>
                             )}
                             <button
-                                onClick={() => { setIsLoggedIn(false); setCurrentUser(null); }}
+                                onClick={handleSignOut}
                                 className="p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
                                 title="Sign out"
                             >
@@ -1833,13 +2268,16 @@
                             userFeedback={userFeedback}
                             setUserFeedback={setUserFeedback}
                             onCreateUser={handleCreateUser}
+                            onDeleteUser={handleDeleteUser}
                             allUsers={allUsers}
+                            currentUser={currentUser}
                             importing={importing}
                             setImporting={setImporting}
                             onExportBackup={handleExportBackup}
                             onImportBackup={handleImportBackup}
                             role={currentRole}
                             onSubmitToAdmin={handleSubmitToAdmin}
+                            pendingReviewCount={pendingReviewCount}
                         />
                         ) : (
                         /* ================= REGULAR USER ================= */
@@ -1872,7 +2310,11 @@
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        root.render(
+            <ErrorBoundary>
+                <App />
+            </ErrorBoundary>
+        );
     </script>
 
     <script>
