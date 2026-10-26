@@ -3848,13 +3848,13 @@
                             )}
                             <div className="text-right">
                                 <p className="text-sm font-bold text-alorica-blue">{currentUser.name}</p>
-                                <p className="text-xs text-gray-500">{isAdmin ? 'Administrator' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
+                                <p className="hidden sm:block text-xs text-gray-500">{isAdmin ? 'Administrator' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
                             </div>
                             <span
                                 title={syncOnline
                                     ? 'Connected — changes are shared with every device'
                                     : 'Offline — changes are saved here and will sync once the server is back'}
-                                className={`hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border whitespace-nowrap ${syncOnline ? 'text-green-700 bg-green-50 border-green-100' : 'text-red-600 bg-red-50 border-red-100'}`}
+                                className={`inline-flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-[11px] font-semibold px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full border whitespace-nowrap ${syncOnline ? 'text-green-700 bg-green-50 border-green-100' : 'text-red-600 bg-red-50 border-red-100'}`}
                             >
                                 <span className={`w-1.5 h-1.5 rounded-full ${syncOnline ? 'bg-green-500' : 'bg-red-500'}`} />
                                 {syncOnline ? 'Synced' : 'Offline'}
