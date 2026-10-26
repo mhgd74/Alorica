@@ -1,4 +1,4 @@
-const { readState, getRev } = require('../../lib/supabase');
+const { readState, getRev } = require('../lib/supabase');
 
 module.exports = async (req, res) => {
     // Basic CORS

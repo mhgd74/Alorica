@@ -1,4 +1,4 @@
-const { applyOps } = require('../../lib/supabase');
+const { applyOps } = require('../lib/supabase');
 
 module.exports = async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
