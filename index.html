@@ -1077,7 +1077,7 @@
 
         // The employee fixes their own booking here. When the pickup is less
         // than an hour away the same form turns into a request for the team leader.
-        const EditBookingDialog = ({ booking, onCancel, onSubmit }) => {
+        const EditBookingDialog = ({ booking, canSelfApprove, onCancel, onSubmit }) => {
             const [form, setForm] = useState({
                 type: booking.type,
                 date: booking.date,
@@ -1090,7 +1090,7 @@
             // Sending the booking to a slot inside the next hour needs approval too,
             // otherwise the cutoff could simply be stepped around.
             const tooSoon = Boolean(form.time) && !canEditBooking({ date: form.date, time: form.time });
-            const locked = needsLeaderApproval(booking, form);
+            const locked = !canSelfApprove && needsLeaderApproval(booking, form);
 
             const submit = (e) => {
                 e.preventDefault();
@@ -1236,7 +1236,7 @@
             );
         };
 
-        const MyBookings = ({ bookings, onDelete, onEdit, pendingChanges }) => {
+        const MyBookings = ({ bookings, onDelete, onEdit, pendingChanges, canSelfApprove }) => {
             const pendingFor = (id) => pendingChanges.find((r) => r.bookingId === id && r.status === 'pending');
             return (
             <div className="p-4 sm:p-8 border-t border-gray-100 bg-gray-50/50">
@@ -1270,7 +1270,7 @@
                                         <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Bus</p>
                                         <p className={`font-bold ${b.bus === WAITLIST ? 'text-red-600' : 'text-alorica-orange'}`}>{b.bus}</p>
                                     </div>
-                                    {!canEditBooking(b) && !pendingFor(b.id) && (
+                                    {!canSelfApprove && !canEditBooking(b) && !pendingFor(b.id) && (
                                         <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-semibold text-alorica-orange bg-orange-50 border border-orange-100 rounded-full px-2.5 py-1">
                                             <Icon name="clock" size={10} /> Needs leader approval
                                         </span>
@@ -1285,7 +1285,7 @@
                                         }`}
                                         title={pendingFor(b.id)
                                             ? 'A request for this booking is already waiting'
-                                            : canEditBooking(b)
+                                            : canEditBooking(b) || canSelfApprove
                                                 ? 'Edit booking'
                                                 : 'Less than an hour left — the team leader must approve the change'}
                                     >
@@ -2473,6 +2473,9 @@
             const [sheetState, setSheetState] = useState(() => loadJSON(STORAGE.sheet, freshSheet()));
             const [syncOnline, setSyncOnline] = useState(SYNC.online);
             const [adminView, setAdminView] = useState('bookings');
+            // A team leader is an employee too, so they can flip between running the
+            // dashboard and managing their own bookings.
+            const [leaderMode, setLeaderMode] = useState('dashboard');
             const [newUser, setNewUser] = useState({ name: '', username: '', password: '', role: 'user' });
             const [newBus, setNewBus] = useState({ name: '', capacity: '' });
             const [userFeedback, setUserFeedback] = useState({ type: '', text: '' });
@@ -2679,7 +2682,11 @@
             // Anything an employee does to their own booking is worth telling the
             // team leaders about, so a freed seat is noticed straight away.
             const notifyLeaders = (title, message, extra = {}) => {
-                teamLeaders.forEach((lead) => notify(lead.username, title, message, extra));
+                // A team leader who books for themselves is the actor here, so they
+                // should not be told about their own action.
+                teamLeaders
+                    .filter((lead) => !currentUser || lead.username !== currentUser.username)
+                    .forEach((lead) => notify(lead.username, title, message, extra));
             };
 
             const myNotifications = useMemo(
@@ -2915,6 +2922,7 @@
                 setIsLoggedIn(false);
                 setCurrentUser(null);
                 setAdminView('bookings');
+                setLeaderMode('dashboard');
                 setActiveTab('arrival');
                 setPwdForm({ next: '', confirm: '' });
                 setPwdFeedback({ type: '', text: '' });
@@ -2979,6 +2987,14 @@
             const currentRole = roleOf(currentUser);
             const isAdmin = currentRole === 'admin';
             const isTeamLead = currentRole === 'teamlead';
+
+            // The admin always runs the dashboard; a team leader chooses between it
+            // and their own booking screen.
+            const showDashboard = isAdmin || (isTeamLead && leaderMode === 'dashboard');
+
+            // A team leader holds the approval authority, so nothing of their own
+            // needs signing off — it is applied directly and the others are told.
+            const approvalRequired = (booking, next) => needsLeaderApproval(booking, next) && !isTeamLead;
 
             // Where the sheet stands: draft, sent to the admin, or locked once the
             // admin has printed it and the buses have been ordered from the vendor.
@@ -3140,7 +3156,7 @@
                     return;
                 }
 
-                if (needsLeaderApproval(target)) {
+                if (approvalRequired(target)) {
                     createEmployeeRequest(target, 'delete', [
                         { field: 'deleted', label: 'Booking', from: 'Active', to: 'Cancelled' }
                     ]);
@@ -3259,7 +3275,7 @@
                     return;
                 }
 
-                if (needsLeaderApproval(booking, next)) {
+                if (approvalRequired(booking, next)) {
                     createEmployeeRequest(booking, 'update', diffs);
                     return;
                 }
@@ -3792,6 +3808,7 @@
                 {editingBooking && (
                     <EditBookingDialog
                         booking={editingBooking}
+                        canSelfApprove={isTeamLead}
                         onCancel={() => setEditingBooking(null)}
                         onSubmit={handleEditBooking}
                     />
@@ -3811,6 +3828,24 @@
                     <nav className="bg-white shadow-md px-4 sm:px-6 py-4 flex justify-between items-center sticky top-0 z-50">
                         <img src="logo.png" alt="Alorica" className="h-8" />
                         <div className="flex items-center gap-3 sm:gap-4">
+                            {isTeamLead && (
+                                <div className="flex items-center bg-gray-100 rounded-full p-0.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => setLeaderMode('dashboard')}
+                                        className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${leaderMode === 'dashboard' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
+                                    >
+                                        Dashboard
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setLeaderMode('me')}
+                                        className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${leaderMode === 'me' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
+                                    >
+                                        My bookings
+                                    </button>
+                                </div>
+                            )}
                             <div className="text-right">
                                 <p className="text-sm font-bold text-alorica-blue">{currentUser.name}</p>
                                 <p className="text-xs text-gray-500">{isAdmin ? 'Administrator' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
@@ -3842,8 +3877,8 @@
                         </div>
                     </nav>
 
-                    <main className={`${(isAdmin || isTeamLead) ? 'max-w-6xl' : 'max-w-4xl'} mx-auto p-4 sm:p-6 mt-6 sm:mt-8 fade-in`}>
-                        {(isAdmin || isTeamLead) ? (
+                    <main className={`${showDashboard ? 'max-w-6xl' : 'max-w-4xl'} mx-auto p-4 sm:p-6 mt-6 sm:mt-8 fade-in`}>
+                        {showDashboard ? (
                         <AdminDashboard
                             adminView={adminView}
                             setAdminView={setAdminView}
@@ -3915,7 +3950,7 @@
                                 dropOffIcon={dropOffIcon}
                                 timeLabel={timeLabel}
                             />
-                            <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} />
+                            <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} canSelfApprove={isTeamLead} />
                         </div>
                         )}
                     </main>
