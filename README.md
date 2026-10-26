@@ -8,11 +8,11 @@
 
 | الطبقة | الخدمة | الحالة |
 |--------|--------|--------|
-| الكود | GitHub — [`mhgd74/Alorica`](https://github.com/mhgd74/Alorica) | الفرع `latest` |
-| الاستضافة | Vercel — [`aloricav1.vercel.app`](https://aloricav1.vercel.app) | تعرض الواجهة فقط (بدون خادم) |
-| قاعدة البيانات | Supabase — مشروع `ygnncoupapvurnvguhdo` | **قيد الترحيل** |
+| الكود | GitHub — [`mhgd74/Alorica`](https://github.com/mhgd74/Alorica) | الفرع `main` |
+| الاستضافة | Vercel — [`aloricav1.vercel.app`](https://aloricav1.vercel.app) | الواجهة + API Functions ✅ |
+| قاعدة البيانات | Supabase — مشروع `ygnncoupapvurnvguhdo` | **مفعّل** ✅ |
 
-> **مهم:** النسخة المنشورة على Vercel ملفات ثابتة فقط. نداءات `/api/*` تُرجع 404، لذا التطبيق يعمل حالياً بوضع `localStorage` المنفصل: **كل جهاز يرى بياناته وحدها** ولا يوجد ربط بين المستخدمين. ربط Supabase هو ما يحلّ هذا.
+> **مهم:** النظام الآن متصل بـ Supabase عبر Vercel API Functions. جميع الأجهزة متزامنة وكل التغييرات تُشارك فوراً بين المستخدمين.
 
 ---
 
@@ -131,9 +131,12 @@ sw.js                   # Service Worker (يستثني /api/ من الكاش)
 manifest.json           # بيانات PWA
 logo.png                # شعار Alorica
 vendor/                 # المكتبات المستضافة محلياً
-supabase/migrations/    # مخطط قاعدة البيانات (Postgres) — قيد الترحيل
+supabase/migrations/    # مخطط قاعدة البيانات (Postgres) — مفعّل ✅
+api/                    # Vercel API Functions للربط مع Supabase
+lib/                    # مكتبات المساعدة (supabase.js)
 vercel.json             # إعدادات نشر Vercel
 .vercelignore           # استثناءات رفع Vercel
+presentation.html       # عرض تقديمي للإدارة (مقارنة النظام القديم بالجديد)
 data/                   # قاعدة SQLite المحلية (لا تُرفع إلى Git)
 certs/                  # شهادة TLS محلية (لا تُرفع إلى Git)
 ```
@@ -148,8 +151,11 @@ node server.js
 HTTPS على المنفذ `3000` يعمل فقط إذا وُجد `certs/server.key` و`certs/server.crt`.
 
 ## النشر
-- **Vercel:** ينشر تلقائياً عند الدفع إلى GitHub. `vercel.json` يعيد توجيه كل المسارات إلى `index.html` — **وهذا يحتاج تعديلاً** لاستثناء `/api/*` عند إضافة الخادم.
-- **Supabase:** الترحيل قيد التنفيذ. الجداول المطلوبة: `items` (الحالة المشتركة) و`sync_meta` (عدّاد المراجعة) والدالة `apply_sync_ops()`.
+- **Vercel:** ينشر تلقائياً عند الدفع إلى GitHub. يعمل كواجهة + API Functions للربط مع Supabase.
+- **Supabase:** **مفعّل** ✅ - الجداول المطلوبة: `items` (الحالة المشتركة) و`sync_meta` (عدّاد المراجعة) والدالة `apply_sync_ops()`.
+- **متغيرات البيئة المطلوبة:**
+  - `SUPABASE_URL`: رابط مشروع Supabase
+  - `SUPABASE_SERVICE_ROLE_KEY`: مفتاح خدمة Supabase
 
 ---
 
@@ -165,6 +171,24 @@ HTTPS على المنفذ `3000` يعمل فقط إذا وُجد `certs/server.k
 
 ## طلبات كلمات المرور
 يُرسل الموظف طلب "نسيت كلمة المرور"، فيصدر الأدمن كلمة مرور **مؤقتة** صالحة 24 ساعة، ويُطالب الموظف بتعيين كلمة جديدة فور الدخول. يُخزَّن هاش الكلمة المؤقتة فقط.
+
+---
+
+## آخر التحديثات
+
+### ✅ تم إصلاح المشاكل التالية:
+1. **إزالة علامة المزامنة من شاشة تسجيل الدخول** - لم تعد تظهر على الكمبيوتر أو الموبايل
+2. **إزالة علامة المزامنة من شاشة تغيير كلمة المرور** - لم تعد تظهر على الكمبيوتر أو الموبايل
+3. **تحسين الشريط العلوي على الموبايل للتيم ليدر** - تخطيط أقل ازدحاماً مع إبقاء علامة المزامنة
+4. **تفعيل الربط مع Supabase** - النظام الآن متصل بـ Supabase عبر Vercel API Functions
+5. **إضافة عرض تقديمي للإدارة** - `presentation.html` يوضح مقارنة النظام القديم بالجديد
+
+### 🎯 حالة النظام الحالية:
+- ✅ واجهة المستخدم تعمل على Vercel
+- ✅ API Functions متصلة بـ Supabase
+- ✅ المزامنة تعمل بين جميع الأجهزة
+- ✅ حالة "Synced" تظهر بشكل صحيح
+- ⚠️ يحتاج إضافة متغيرات البيئة في Vercel Dashboard يدوياً (SUPABASE_URL و SUPABASE_SERVICE_ROLE_KEY)
 
 ---
 
