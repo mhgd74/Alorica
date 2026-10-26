@@ -760,17 +760,11 @@
          * 7. Screens
          * ============================================================= */
 
-        const Login = ({ toasts, loginData, setLoginData, error, notice, onSubmit, onForgotPassword, syncOnline }) => (
+        const Login = ({ toasts, loginData, setLoginData, error, notice, onSubmit, onForgotPassword }) => (
             <>
                 <Toasts toasts={toasts} />
                 <div className="min-h-screen flex items-center justify-center p-4">
-                    <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in relative">
-                        <div className="absolute top-4 right-4">
-                            <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${syncOnline ? 'text-green-700 bg-green-50 border-green-100' : 'text-red-600 bg-red-50 border-red-100'}`}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${syncOnline ? 'bg-green-500' : 'bg-red-500'}`} />
-                                {syncOnline ? 'Synced' : 'Offline'}
-                            </span>
-                        </div>
+                    <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in">
                         <div className="flex flex-col items-center mb-8">
                             <img src="logo.png" alt="Alorica" className="h-12 mb-4" />
                             <h1 className="text-2xl font-bold text-alorica-blue">Login</h1>
@@ -848,7 +842,7 @@
         );
 
         // Replaces the app for accounts that still carry their temporary password.
-        const PasswordChange = ({ user, form, setForm, feedback, onSubmit, onSignOut, toasts, syncOnline }) => {
+        const PasswordChange = ({ user, form, setForm, feedback, onSubmit, onSignOut, toasts }) => {
             const fields = [
                 { key: 'next', label: 'New password', autoComplete: 'new-password' },
                 { key: 'confirm', label: 'Confirm new password', autoComplete: 'new-password' }
@@ -857,13 +851,7 @@
                 <>
                 <Toasts toasts={toasts} />
                 <div className="min-h-screen flex items-center justify-center p-4">
-                    <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in relative">
-                        <div className="absolute top-4 right-4">
-                            <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${syncOnline ? 'text-green-700 bg-green-50 border-green-100' : 'text-red-600 bg-red-50 border-red-100'}`}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${syncOnline ? 'bg-green-500' : 'bg-red-500'}`} />
-                                {syncOnline ? 'Synced' : 'Offline'}
-                            </span>
-                        </div>
+                    <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in">
                             <div className="flex flex-col items-center mb-6">
                                 <img src="logo.png" alt="Alorica" className="h-12 mb-4" />
                                 <h1 className="text-2xl font-bold text-alorica-blue">Set a new password</h1>
@@ -3775,7 +3763,6 @@
                         notice={loginNotice}
                         onSubmit={handleLogin}
                         onForgotPassword={handleForgotPassword}
-                        syncOnline={syncOnline}
                     />
                 );
             }
@@ -3791,7 +3778,6 @@
                         feedback={pwdFeedback}
                         onSubmit={handleChangePassword}
                         onSignOut={handleSignOut}
-                        syncOnline={syncOnline}
                     />
                 );
             }
@@ -3838,11 +3824,11 @@
                     />
                 )}
                 <div className="min-h-screen bg-alorica-light">
-                    <nav className="bg-white shadow-md px-4 sm:px-6 py-4 flex justify-between items-center sticky top-0 z-50">
-                        <img src="logo.png" alt="Alorica" className="h-8" />
-                        <div className="flex items-center gap-3 sm:gap-4">
+                    <nav className="bg-white shadow-md px-3 sm:px-6 py-3 sm:py-4 flex justify-between items-center sticky top-0 z-50">
+                        <img src="logo.png" alt="Alorica" className="h-7 sm:h-8" />
+                        <div className="flex items-center gap-2 sm:gap-4">
                             {isTeamLead && (
-                                <div className="flex items-center bg-gray-100 rounded-full p-0.5">
+                                <div className="hidden sm:flex items-center bg-gray-100 rounded-full p-0.5">
                                     <button
                                         type="button"
                                         onClick={() => setLeaderMode('dashboard')}
@@ -3859,15 +3845,33 @@
                                     </button>
                                 </div>
                             )}
-                            <div className="text-right">
+                            {isTeamLead && (
+                                <div className="sm:hidden flex items-center bg-gray-100 rounded-full p-0.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => setLeaderMode('dashboard')}
+                                        className={`px-2 py-1 rounded-full text-[10px] font-semibold transition-colors ${leaderMode === 'dashboard' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
+                                    >
+                                        Dashboard
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setLeaderMode('me')}
+                                        className={`px-2 py-1 rounded-full text-[10px] font-semibold transition-colors ${leaderMode === 'me' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
+                                    >
+                                        Me
+                                    </button>
+                                </div>
+                            )}
+                            <div className="text-right hidden sm:block">
                                 <p className="text-sm font-bold text-alorica-blue">{currentUser.name}</p>
-                                <p className="hidden sm:block text-xs text-gray-500">{isAdmin ? 'Administrator' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
+                                <p className="text-xs text-gray-500">{isAdmin ? 'Administrator' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
                             </div>
                             <span
                                 title={syncOnline
                                     ? 'Connected — changes are shared with every device'
                                     : 'Offline — changes are saved here and will sync once the server is back'}
-                                className={`inline-flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-[11px] font-semibold px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full border whitespace-nowrap ${syncOnline ? 'text-green-700 bg-green-50 border-green-100' : 'text-red-600 bg-red-50 border-red-100'}`}
+                                className={`hidden sm:inline-flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-[11px] font-semibold px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full border whitespace-nowrap ${syncOnline ? 'text-green-700 bg-green-50 border-green-100' : 'text-red-600 bg-red-50 border-red-100'}`}
                             >
                                 <span className={`w-1.5 h-1.5 rounded-full ${syncOnline ? 'bg-green-500' : 'bg-red-500'}`} />
                                 {syncOnline ? 'Synced' : 'Offline'}
@@ -3882,10 +3886,10 @@
                             />
                             <button
                                 onClick={handleSignOut}
-                                className="p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
+                                className="p-1.5 sm:p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
                                 title="Sign out"
                             >
-                                <Icon name="log-out" size={24} />
+                                <Icon name="log-out" size={20} className="sm:w-6 sm:h-6" />
                             </button>
                         </div>
                     </nav>
