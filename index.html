@@ -2427,7 +2427,7 @@
             /* ------------------ state ------------------ */
             const [isLoggedIn, setIsLoggedIn] = useState(false);
             const [currentUser, setCurrentUser] = useState(null);
-            const [loginData, setLoginData] = useState({ username: '', password: '' });
+            const [loginData, setLoginData] = useState({ username: '', password: '', rememberMe: false });
             const [error, setError] = useState('');
             const [activeTab, setActiveTab] = useState('arrival');
             const [bookings, setBookings] = useState(() => loadJSON(STORAGE.bookings, []));
@@ -2720,6 +2720,25 @@
                 [allUsers]
             );
 
+            // Check for remembered session on load
+            useEffect(() => {
+                const rememberedUser = localStorage.getItem('rememberedUser');
+                if (rememberedUser) {
+                    try {
+                        const user = JSON.parse(rememberedUser);
+                        const match = allUsers.find((u) => u.username === user.username);
+                        if (match) {
+                            setIsLoggedIn(true);
+                            setCurrentUser(match);
+                        } else {
+                            localStorage.removeItem('rememberedUser');
+                        }
+                    } catch (err) {
+                        localStorage.removeItem('rememberedUser');
+                    }
+                }
+            }, [allUsers]);
+
             // Biometric login using WebAuthn
             const handleBiometricLogin = async () => {
                 if (!window.PublicKeyCredential) {
@@ -2944,7 +2963,15 @@
                 setCurrentUser(user);
                 setError('');
                 setLoginNotice('');
-                setLoginData({ username: '', password: '' });
+                
+                // Handle remember me
+                if (loginData.rememberMe) {
+                    localStorage.setItem('rememberedUser', JSON.stringify({ username: user.username }));
+                } else {
+                    localStorage.removeItem('rememberedUser');
+                }
+                
+                setLoginData({ username: '', password: '', rememberMe: false });
             };
 
             /* ------------------ forgot password ------------------ */
@@ -3094,6 +3121,7 @@
                 setPwdForm({ next: '', confirm: '' });
                 setPwdFeedback({ type: '', text: '' });
                 setLoginNotice('');
+                localStorage.removeItem('rememberedUser');
             };
 
             /* ------------------ booking ------------------ */
@@ -3968,6 +3996,19 @@
                                                 <Icon name="lock" size={18} />
                                             </div>
                                         </div>
+                                    </div>
+
+                                    <div className="flex items-center">
+                                        <input
+                                            type="checkbox"
+                                            id="rememberMe"
+                                            checked={loginData.rememberMe}
+                                            onChange={(e) => setLoginData({ ...loginData, rememberMe: e.target.checked })}
+                                            className="w-4 h-4 text-alorica-blue border-gray-300 rounded focus:ring-alorica-blue"
+                                        />
+                                        <label htmlFor="rememberMe" className="ml-2 text-sm text-gray-600">
+                                            Remember me for 30 days
+                                        </label>
                                     </div>
 
                                     {error && (
