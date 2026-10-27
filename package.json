@@ -7,10 +7,12 @@
     "start": "node server.js",
     "dev": "vercel dev",
     "format": "prettier --write \"**/*.{js,json,md}\"",
-    "format:check": "prettier --check \"**/*.{js,json,md}\""
+    "format:check": "prettier --check \"**/*.{js,json,md}\"",
+    "generate-icons": "node generate-icons.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0"
+    "@supabase/supabase-js": "^2.39.0",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "prettier": "^3.9.10"

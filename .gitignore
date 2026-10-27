@@ -15,3 +15,7 @@ data/
 # Internal company documents — must not be published
 Alorica-Transport-System-Integration-Requirements.docx
 Alorica-Transport-System-Integration-Requirements.pdf
+
+# Icon generator files (keep only generated icons)
+generate-icons.js
+icon-original.png
