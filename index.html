@@ -796,6 +796,26 @@
                             </button>
                         </form>
 
+                        {window.PublicKeyCredential && (
+                            <div className="mt-4 space-y-2">
+                                <button
+                                    type="button"
+                                    onClick={handleBiometricLogin}
+                                    className="w-full bg-gray-100 hover:bg-gray-200 text-alorica-blue font-bold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-all"
+                                >
+                                    <Icon name="fingerprint" size={20} />
+                                    Login with Biometric
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleRegisterBiometric}
+                                    className="w-full text-sm text-gray-500 hover:text-alorica-blue font-medium transition-colors"
+                                >
+                                    Enable Biometric Login
+                                </button>
+                            </div>
+                        )}
+
                         <button
                             type="button"
                             onClick={onForgotPassword}
@@ -887,7 +907,10 @@
             formData, setFormData,
             selectedRoad, setSelectedRoad,
             onSubmit,
-            dropOffLabel, dropOffIcon, timeLabel
+            dropOffLabel, dropOffIcon, timeLabel,
+            onVoiceInput,
+            isListening,
+            speechField
         }) => {
             const shiftSlots = activeTab === 'arrival' ? SHIFT_SLOTS.arrival : SHIFT_SLOTS.departure;
 
@@ -928,6 +951,15 @@
                         <div>
                             <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
                                 <span className="flex items-center gap-2"><Icon name={dropOffIcon} size={18} className="text-alorica-orange" /> {dropOffLabel}</span>
+                                {('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onVoiceInput('location')}
+                                        className={`text-xs font-semibold px-2 py-1 rounded-lg transition-colors ${isListening && speechField === 'location' ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                    >
+                                        <Icon name={isListening && speechField === 'location' ? 'mic-off' : 'mic'} size={14} />
+                                    </button>
+                                )}
                             </label>
 
                             {/* Road Selection Buttons */}
@@ -2789,6 +2821,56 @@
                 [allUsers]
             );
 
+            // Voice booking using Web Speech API
+            const [isListening, setIsListening] = useState(false);
+            const [speechField, setSpeechField] = useState(null);
+
+            const startVoiceInput = (field) => {
+                if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                    pushToast('Voice input is not supported on this browser', 'error');
+                    return;
+                }
+
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                const recognition = new SpeechRecognition();
+                
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+
+                recognition.onstart = () => {
+                    setIsListening(true);
+                    setSpeechField(field);
+                };
+
+                recognition.onresult = (event) => {
+                    const transcript = event.results[0][0].transcript;
+                    setFormData(prev => ({ ...prev, [field]: transcript }));
+                    setIsListening(false);
+                    setSpeechField(null);
+                };
+
+                recognition.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                    setIsListening(false);
+                    setSpeechField(null);
+                    pushToast('Voice input failed. Please try again.', 'error');
+                };
+
+                recognition.onend = () => {
+                    setIsListening(false);
+                    setSpeechField(null);
+                };
+
+                recognition.start();
+            };
+
+            const stopVoiceInput = () => {
+                if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                // Recognition will stop automatically after result
+            };
+
             const handleLogin = async (e) => {
                 e.preventDefault();
 
@@ -2828,6 +2910,110 @@
                 setError('');
                 setLoginNotice('');
                 setLoginData({ username: '', password: '' });
+            };
+
+            // Biometric login using WebAuthn
+            const handleBiometricLogin = async () => {
+                if (!window.PublicKeyCredential) {
+                    setError('Biometric login is not supported on this device');
+                    return;
+                }
+
+                const username = loginData.username.trim();
+                if (!username) {
+                    setError('Please enter your username first');
+                    return;
+                }
+
+                const match = allUsers.find((u) => u.username === username);
+                if (!match) {
+                    setError('User not found');
+                    return;
+                }
+
+                try {
+                    // Get stored credential ID from user data
+                    if (!match.webauthnId) {
+                        setError('Biometric login not set up for this account. Please login with password first and enable biometric.');
+                        return;
+                    }
+
+                    const credentialRequestOptions = {
+                        challenge: new Uint8Array(32),
+                        allowCredentials: [{
+                            id: Uint8Array.from(atob(match.webauthnId), c => c.charCodeAt(0)),
+                            type: 'public-key',
+                        }],
+                        userVerification: 'preferred',
+                        timeout: 60000
+                    };
+
+                    const assertion = await navigator.credentials.get(credentialRequestOptions);
+                    
+                    if (assertion) {
+                        setIsLoggedIn(true);
+                        setCurrentUser(match);
+                        setError('');
+                        setLoginData({ username: '', password: '' });
+                        pushToast('Biometric login successful!', 'success');
+                    }
+                } catch (err) {
+                    console.error('Biometric login error:', err);
+                    setError('Biometric login failed. Please try with password.');
+                }
+            };
+
+            // Register biometric credential
+            const handleRegisterBiometric = async () => {
+                if (!window.PublicKeyCredential) {
+                    setError('Biometric login is not supported on this device');
+                    return;
+                }
+
+                const username = loginData.username.trim();
+                const match = allUsers.find((u) => u.username === username);
+                if (!match) {
+                    setError('User not found');
+                    return;
+                }
+
+                try {
+                    const credentialCreationOptions = {
+                        challenge: new Uint8Array(32),
+                        rp: {
+                            name: 'Alorica Booking System',
+                            id: 'alorica-booking',
+                        },
+                        user: {
+                            id: new Uint8Array(16),
+                            name: username,
+                            displayName: match.name,
+                        },
+                        pubKeyCredParams: [
+                            { type: 'public-key', alg: -7 }, // ES256
+                        ],
+                        authenticatorSelection: {
+                            authenticatorAttachment: 'platform',
+                            userVerification: 'preferred'
+                        },
+                        timeout: 60000
+                    };
+
+                    const credential = await navigator.credentials.create(credentialCreationOptions);
+                    
+                    if (credential) {
+                        const webauthnId = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
+                        
+                        // Save webauthnId to user data
+                        const updatedUser = { ...match, webauthnId };
+                        setCustomUsers((prev) => prev.map((u) => (u.username === username ? updatedUser : u)));
+                        
+                        pushToast('Biometric login enabled successfully!', 'success');
+                    }
+                } catch (err) {
+                    console.error('Biometric registration error:', err);
+                    setError('Failed to enable biometric login. Your device may not support it.');
+                }
             };
 
             /* ------------------ forgot password ------------------ */
@@ -4018,6 +4204,9 @@
                                 dropOffLabel={dropOffLabel}
                                 dropOffIcon={dropOffIcon}
                                 timeLabel={timeLabel}
+                                onVoiceInput={startVoiceInput}
+                                isListening={isListening}
+                                speechField={speechField}
                             />
                             <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} canSelfApprove={isTeamLead} />
                         </div>
