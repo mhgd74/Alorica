@@ -2778,7 +2778,8 @@
                     return;
                 }
 
-                const username = loginData.username.trim();
+                // Use current user if logged in, otherwise use login form username
+                const username = isLoggedIn ? currentUser.username : loginData.username.trim();
                 const match = allUsers.find((u) => u.username === username);
                 if (!match) {
                     setError('User not found');
@@ -2821,6 +2822,11 @@
                         // Save webauthnId to user data
                         const updatedUser = { ...match, webauthnId };
                         setCustomUsers((prev) => prev.map((u) => (u.username === username ? updatedUser : u)));
+                        
+                        // Update current user if logged in
+                        if (isLoggedIn) {
+                            setCurrentUser(updatedUser);
+                        }
                         
                         pushToast('Biometric login enabled successfully!', 'success');
                     }
@@ -4119,6 +4125,15 @@
                                 onDecide={decideChangeRequest}
                                 pendingRequest={(requestId) => changeRequests.find((r) => r.id === requestId && r.status === 'pending')}
                             />
+                            {window.PublicKeyCredential && !currentUser.webauthnId && (
+                                <button
+                                    onClick={handleRegisterBiometric}
+                                    className="p-1.5 sm:p-2 hover:bg-alorica-light rounded-full text-alorica-blue transition-colors"
+                                    title="Enable Biometric Login"
+                                >
+                                    <Icon name="fingerprint" size={20} className="sm:w-6 sm:h-6" />
+                                </button>
+                            )}
                             <button
                                 onClick={handleSignOut}
                                 className="p-1.5 sm:p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
