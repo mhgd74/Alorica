@@ -6,8 +6,6 @@
   "scripts": {
     "start": "node server.js",
     "dev": "vercel dev",
-    "build": "vercel build",
-    "deploy": "vercel --prod",
     "format": "prettier --write \"**/*.{js,json,md}\"",
     "format:check": "prettier --check \"**/*.{js,json,md}\""
   },
