@@ -2801,11 +2801,12 @@
                     
                     // Create a unique user ID from username
                     const userIdBuffer = new TextEncoder().encode(username);
-                    const userId = new Uint8Array(userIdBuffer.slice(0, 16));
+                    const userId = new Uint8Array(Math.max(userIdBuffer.length, 16));
+                    userId.set(userIdBuffer.slice(0, 16));
                     
-                    // Pad to 16 bytes if needed
-                    while (userId.length < 16) {
-                        userId.push(0);
+                    // Fill remaining with zeros if needed
+                    for (let i = userIdBuffer.length; i < 16; i++) {
+                        userId[i] = 0;
                     }
 
                     const credentialCreationOptions = {
