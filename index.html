@@ -731,7 +731,7 @@
          * 7. Screens
          * ============================================================= */
 
-        const Login = ({ toasts, loginData, setLoginData, error, notice, onSubmit, onForgotPassword }) => (
+        const Login = ({ toasts, loginData, setLoginData, error, notice, onSubmit, onForgotPassword, onBiometricLogin, onRegisterBiometric }) => (
             <>
                 <Toasts toasts={toasts} />
                 <div className="min-h-screen flex items-center justify-center p-4">
@@ -4000,6 +4000,8 @@
                         notice={loginNotice}
                         onSubmit={handleLogin}
                         onForgotPassword={handleForgotPassword}
+                        onBiometricLogin={handleBiometricLogin}
+                        onRegisterBiometric={handleRegisterBiometric}
                     />
                 );
             }
