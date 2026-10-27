@@ -731,6 +731,100 @@
          * 7. Screens
          * ============================================================= */
 
+        const Login = ({ toasts, loginData, setLoginData, error, notice, onSubmit, onForgotPassword, rememberMe, setRememberMe }) => (
+            <>
+                <Toasts toasts={toasts} />
+                <div className="min-h-screen flex items-center justify-center p-4">
+                    <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in">
+                        <div className="flex flex-col items-center mb-8">
+                            <img src="logo.png" alt="Alorica" className="h-12 mb-4" />
+                            <h1 className="text-2xl font-bold text-alorica-blue">Login</h1>
+                            <p className="text-gray-500 text-sm mt-2 text-center">Alorica Booking System</p>
+                        </div>
+
+                        <form onSubmit={onSubmit} className="space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                                <div className="relative">
+                                    <input
+                                        type="text"
+                                        required
+                                        autoComplete="username"
+                                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
+                                        placeholder="Enter your username"
+                                        value={loginData.username}
+                                        onChange={(e) => setLoginData({ ...loginData, username: e.target.value })}
+                                    />
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                        <Icon name="user" size={18} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                                <div className="relative">
+                                    <input
+                                        type="password"
+                                        required
+                                        autoComplete="current-password"
+                                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
+                                        placeholder="Enter your password"
+                                        value={loginData.password}
+                                        onChange={(e) => setLoginData({ ...loginData, password: e.target.value })}
+                                    />
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                                        <Icon name="lock" size={18} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    id="rememberMe"
+                                    checked={rememberMe}
+                                    onChange={(e) => setRememberMe(e.target.checked)}
+                                    className="w-4 h-4 text-alorica-blue border-gray-300 rounded focus:ring-alorica-blue"
+                                />
+                                <label htmlFor="rememberMe" className="ml-2 text-sm text-gray-600">
+                                    Remember me for 30 days
+                                </label>
+                            </div>
+
+                            {error && (
+                                <p className="text-red-500 text-sm text-center font-medium bg-red-50 py-2 rounded-lg">{error}</p>
+                            )}
+
+                            {notice && (
+                                <p className="text-alorica-blue text-sm text-center font-medium bg-alorica-light py-2 px-3 rounded-lg">{notice}</p>
+                            )}
+
+                            <button
+                                type="submit"
+                                className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all"
+                            >
+                                Login
+                                <Icon name="chevron-right" size={20} />
+                            </button>
+                        </form>
+
+                        <button
+                            type="button"
+                            onClick={onForgotPassword}
+                            className="w-full mt-4 text-sm text-gray-500 hover:text-alorica-blue font-medium transition-colors"
+                        >
+                            Forgot password?
+                        </button>
+
+                        <p className="text-xs text-gray-400 text-center mt-3">
+                            A reset request goes to the administrator, who issues a temporary password.
+                        </p>
+                    </div>
+                </div>
+            </>
+        );
+
         // Replaces the app for accounts that still carry their temporary password.
         const PasswordChange = ({ user, form, setForm, feedback, onSubmit, onSignOut, toasts }) => {
             const fields = [
@@ -806,10 +900,7 @@
             formData, setFormData,
             selectedRoad, setSelectedRoad,
             onSubmit,
-            dropOffLabel, dropOffIcon, timeLabel,
-            onVoiceInput,
-            isListening,
-            speechField
+            dropOffLabel, dropOffIcon, timeLabel
         }) => {
             const shiftSlots = activeTab === 'arrival' ? SHIFT_SLOTS.arrival : SHIFT_SLOTS.departure;
 
@@ -850,15 +941,6 @@
                         <div>
                             <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
                                 <span className="flex items-center gap-2"><Icon name={dropOffIcon} size={18} className="text-alorica-orange" /> {dropOffLabel}</span>
-                                {('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) && (
-                                    <button
-                                        type="button"
-                                        onClick={() => onVoiceInput('location')}
-                                        className={`text-xs font-semibold px-2 py-1 rounded-lg transition-colors ${isListening && speechField === 'location' ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                                    >
-                                        <Icon name={isListening && speechField === 'location' ? 'mic-off' : 'mic'} size={14} />
-                                    </button>
-                                )}
                             </label>
 
                             {/* Road Selection Buttons */}
@@ -2427,7 +2509,7 @@
             /* ------------------ state ------------------ */
             const [isLoggedIn, setIsLoggedIn] = useState(false);
             const [currentUser, setCurrentUser] = useState(null);
-            const [loginData, setLoginData] = useState({ username: '', password: '', rememberMe: false });
+            const [loginData, setLoginData] = useState({ username: '', password: '' });
             const [error, setError] = useState('');
             const [activeTab, setActiveTab] = useState('arrival');
             const [bookings, setBookings] = useState(() => loadJSON(STORAGE.bookings, []));
@@ -2720,211 +2802,6 @@
                 [allUsers]
             );
 
-            // Check for remembered session on load
-            useEffect(() => {
-                const rememberedUser = localStorage.getItem('rememberedUser');
-                if (rememberedUser) {
-                    try {
-                        const user = JSON.parse(rememberedUser);
-                        const match = allUsers.find((u) => u.username === user.username);
-                        if (match) {
-                            setIsLoggedIn(true);
-                            setCurrentUser(match);
-                        } else {
-                            localStorage.removeItem('rememberedUser');
-                        }
-                    } catch (err) {
-                        localStorage.removeItem('rememberedUser');
-                    }
-                }
-            }, [allUsers]);
-
-            // Biometric login using WebAuthn
-            const handleBiometricLogin = async () => {
-                if (!window.PublicKeyCredential) {
-                    setError('Biometric login is not supported on this device');
-                    return;
-                }
-
-                const username = loginData.username.trim();
-                if (!username) {
-                    setError('Please enter your username first');
-                    return;
-                }
-
-                const match = allUsers.find((u) => u.username === username);
-                if (!match) {
-                    setError('User not found');
-                    return;
-                }
-
-                try {
-                    // Get stored credential ID from user data
-                    if (!match.webauthnId) {
-                        setError('Biometric login not set up for this account. Please login with password first and enable biometric.');
-                        return;
-                    }
-
-                    const credentialRequestOptions = {
-                        challenge: new Uint8Array(32),
-                        allowCredentials: [{
-                            id: Uint8Array.from(atob(match.webauthnId), c => c.charCodeAt(0)),
-                            type: 'public-key',
-                        }],
-                        userVerification: 'preferred',
-                        timeout: 60000
-                    };
-
-                    const assertion = await navigator.credentials.get(credentialRequestOptions);
-                    
-                    if (assertion) {
-                        setIsLoggedIn(true);
-                        setCurrentUser(match);
-                        setError('');
-                        setLoginData({ username: '', password: '' });
-                        pushToast('Biometric login successful!', 'success');
-                    }
-                } catch (err) {
-                    console.error('Biometric login error:', err);
-                    setError('Biometric login failed. Please try with password.');
-                }
-            };
-
-            // Register biometric credential
-            const handleRegisterBiometric = async () => {
-                console.log('Starting biometric registration...');
-                
-                if (!window.PublicKeyCredential) {
-                    setError('Biometric login is not supported on this device');
-                    return;
-                }
-
-                // Use current user if logged in, otherwise use login form username
-                const username = isLoggedIn ? currentUser.username : loginData.username.trim();
-                console.log('Username:', username);
-                
-                const match = allUsers.find((u) => u.username === username);
-                if (!match) {
-                    setError('User not found');
-                    return;
-                }
-
-                // Check if already has biometric enabled
-                if (match.webauthnId) {
-                    setError('Biometric login is already enabled for this account');
-                    return;
-                }
-
-                try {
-                    pushToast('Registering biometric...', 'info');
-                    
-                    // Create a unique user ID from username
-                    const userIdBuffer = new TextEncoder().encode(username);
-                    const userId = new Uint8Array(Math.max(userIdBuffer.length, 16));
-                    userId.set(userIdBuffer.slice(0, 16));
-                    
-                    // Fill remaining with zeros if needed
-                    for (let i = userIdBuffer.length; i < 16; i++) {
-                        userId[i] = 0;
-                    }
-
-                    const credentialCreationOptions = {
-                        challenge: crypto.getRandomValues(new Uint8Array(32)),
-                        rp: {
-                            name: 'Alorica Booking System',
-                            // Let browser determine rp.id automatically
-                        },
-                        user: {
-                            id: userId,
-                            name: username,
-                            displayName: match.name,
-                        },
-                        pubKeyCredParams: [
-                            { type: 'public-key', alg: -7 }, // ES256
-                        ],
-                        timeout: 60000,
-                        excludeCredentials: [] // No existing credentials to exclude
-                    };
-
-                    console.log('Creating credential with options:', credentialCreationOptions);
-                    const credential = await navigator.credentials.create(credentialCreationOptions);
-                    console.log('Credential created:', credential);
-                    
-                    if (credential) {
-                        const webauthnId = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
-                        console.log('WebAuthn ID:', webauthnId);
-                        
-                        // Save webauthnId to user data
-                        const updatedUser = { ...match, webauthnId };
-                        setCustomUsers((prev) => prev.map((u) => (u.username === username ? updatedUser : u)));
-                        
-                        // Update current user if logged in
-                        if (isLoggedIn) {
-                            setCurrentUser(updatedUser);
-                        }
-                        
-                        pushToast('Biometric login enabled successfully!', 'success');
-                    }
-                } catch (err) {
-                    console.error('Biometric registration error:', err);
-                    pushToast('Biometric registration failed: ' + (err.message || 'Unknown error'), 'error');
-                }
-            };
-
-            // Voice booking using Web Speech API
-            const [isListening, setIsListening] = useState(false);
-            const [speechField, setSpeechField] = useState(null);
-
-            const startVoiceInput = (field) => {
-                if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-                    pushToast('Voice input is not supported on this browser (try Chrome or Edge)', 'error');
-                    return;
-                }
-
-                try {
-                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                    const recognition = new SpeechRecognition();
-                    
-                    recognition.continuous = false;
-                    recognition.interimResults = false;
-                    recognition.lang = 'en-US';
-
-                    recognition.onstart = () => {
-                        setIsListening(true);
-                        setSpeechField(field);
-                        pushToast('Listening... Speak now', 'info');
-                    };
-
-                    recognition.onresult = (event) => {
-                        if (event.results && event.results.length > 0) {
-                            const transcript = event.results[0][0].transcript;
-                            console.log('Speech result:', transcript);
-                            setFormData(prev => ({ ...prev, [field]: transcript }));
-                            pushToast('Voice input captured!', 'success');
-                        }
-                        setIsListening(false);
-                        setSpeechField(null);
-                    };
-
-                    recognition.onerror = (event) => {
-                        console.error('Speech recognition error:', event.error);
-                        setIsListening(false);
-                        setSpeechField(null);
-                        pushToast('Voice input failed: ' + event.error, 'error');
-                    };
-
-                    recognition.onend = () => {
-                        setIsListening(false);
-                        setSpeechField(null);
-                    };
-
-                    recognition.start();
-                } catch (err) {
-                    console.error('Speech recognition init error:', err);
-                    pushToast('Failed to start voice input', 'error');
-                }
-            };
-
             const handleLogin = async (e) => {
                 e.preventDefault();
 
@@ -2963,15 +2840,7 @@
                 setCurrentUser(user);
                 setError('');
                 setLoginNotice('');
-                
-                // Handle remember me
-                if (loginData.rememberMe) {
-                    localStorage.setItem('rememberedUser', JSON.stringify({ username: user.username }));
-                } else {
-                    localStorage.removeItem('rememberedUser');
-                }
-                
-                setLoginData({ username: '', password: '', rememberMe: false });
+                setLoginData({ username: '', password: '' });
             };
 
             /* ------------------ forgot password ------------------ */
@@ -3121,7 +2990,6 @@
                 setPwdForm({ next: '', confirm: '' });
                 setPwdFeedback({ type: '', text: '' });
                 setLoginNotice('');
-                localStorage.removeItem('rememberedUser');
             };
 
             /* ------------------ booking ------------------ */
@@ -3951,117 +3819,15 @@
             /* ------------------ login screen ------------------ */
             if (!isLoggedIn) {
                 return (
-                    <>
-                        <Toasts toasts={toasts} />
-                        <div className="min-h-screen flex items-center justify-center p-4">
-                            <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 fade-in">
-                                <div className="flex flex-col items-center mb-8">
-                                    <img src="logo.png" alt="Alorica" className="h-12 mb-4" />
-                                    <h1 className="text-2xl font-bold text-alorica-blue">Login</h1>
-                                    <p className="text-gray-500 text-sm mt-2 text-center">Alorica Booking System</p>
-                                </div>
-
-                                <form onSubmit={handleLogin} className="space-y-6">
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                                        <div className="relative">
-                                            <input
-                                                type="text"
-                                                required
-                                                autoComplete="username"
-                                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
-                                                placeholder="Enter your username"
-                                                value={loginData.username}
-                                                onChange={(e) => setLoginData({ ...loginData, username: e.target.value })}
-                                            />
-                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                                                <Icon name="user" size={18} />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                                        <div className="relative">
-                                            <input
-                                                type="password"
-                                                required
-                                                autoComplete="current-password"
-                                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none transition-all text-gray-800 pl-10"
-                                                placeholder="Enter your password"
-                                                value={loginData.password}
-                                                onChange={(e) => setLoginData({ ...loginData, password: e.target.value })}
-                                            />
-                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                                                <Icon name="lock" size={18} />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex items-center">
-                                        <input
-                                            type="checkbox"
-                                            id="rememberMe"
-                                            checked={loginData.rememberMe}
-                                            onChange={(e) => setLoginData({ ...loginData, rememberMe: e.target.checked })}
-                                            className="w-4 h-4 text-alorica-blue border-gray-300 rounded focus:ring-alorica-blue"
-                                        />
-                                        <label htmlFor="rememberMe" className="ml-2 text-sm text-gray-600">
-                                            Remember me for 30 days
-                                        </label>
-                                    </div>
-
-                                    {error && (
-                                        <p className="text-red-500 text-sm text-center font-medium bg-red-50 py-2 px-3 rounded-lg">{error}</p>
-                                    )}
-
-                                    {loginNotice && (
-                                        <p className="text-alorica-blue text-sm text-center font-medium bg-alorica-light py-2 px-3 rounded-lg">{loginNotice}</p>
-                                    )}
-
-                                    <button
-                                        type="submit"
-                                        className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all"
-                                    >
-                                        Login
-                                        <Icon name="chevron-right" size={20} />
-                                    </button>
-                                </form>
-
-                                {window.PublicKeyCredential && (
-                                    <div className="mt-4 space-y-2">
-                                        <button
-                                            type="button"
-                                            onClick={handleBiometricLogin}
-                                            className="w-full bg-gray-100 hover:bg-gray-200 text-alorica-blue font-bold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-all"
-                                        >
-                                            <Icon name="fingerprint" size={20} />
-                                            Login with Biometric
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleRegisterBiometric}
-                                            className="w-full text-sm text-gray-500 hover:text-alorica-blue font-medium transition-colors"
-                                        >
-                                            Enable Biometric Login
-                                        </button>
-                                    </div>
-                                )}
-
-                                <button
-                                    type="button"
-                                    onClick={handleForgotPassword}
-                                    className="w-full mt-4 text-sm text-gray-500 hover:text-alorica-blue font-medium transition-colors"
-                                >
-                                    Forgot password?
-                                </button>
-
-                                <p className="text-xs text-gray-400 text-center mt-3">
-                                    A reset request goes to the administrator, who issues a temporary password.
-                                </p>
-                            </div>
-                        </div>
-                    </>
+                    <Login
+                        toasts={toasts}
+                        loginData={loginData}
+                        setLoginData={setLoginData}
+                        error={error}
+                        notice={loginNotice}
+                        onSubmit={handleLogin}
+                        onForgotPassword={handleForgotPassword}
+                    />
                 );
             }
 
@@ -4182,15 +3948,6 @@
                                 onDecide={decideChangeRequest}
                                 pendingRequest={(requestId) => changeRequests.find((r) => r.id === requestId && r.status === 'pending')}
                             />
-                            {window.PublicKeyCredential && !currentUser.webauthnId && (
-                                <button
-                                    onClick={handleRegisterBiometric}
-                                    className="p-1.5 sm:p-2 hover:bg-alorica-light rounded-full text-alorica-blue transition-colors"
-                                    title="Enable Biometric Login"
-                                >
-                                    <Icon name="fingerprint" size={20} className="sm:w-6 sm:h-6" />
-                                </button>
-                            )}
                             <button
                                 onClick={handleSignOut}
                                 className="p-1.5 sm:p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
@@ -4274,9 +4031,6 @@
                                 dropOffLabel={dropOffLabel}
                                 dropOffIcon={dropOffIcon}
                                 timeLabel={timeLabel}
-                                onVoiceInput={startVoiceInput}
-                                isListening={isListening}
-                                speechField={speechField}
                             />
                             <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} canSelfApprove={isTeamLead} />
                         </div>
