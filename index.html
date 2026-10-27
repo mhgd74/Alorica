@@ -2793,14 +2793,23 @@
                 }
 
                 try {
+                    // Create a unique user ID from username
+                    const userIdBuffer = new TextEncoder().encode(username);
+                    const userId = new Uint8Array(userIdBuffer.slice(0, 16));
+                    
+                    // Pad to 16 bytes if needed
+                    while (userId.length < 16) {
+                        userId.push(0);
+                    }
+
                     const credentialCreationOptions = {
-                        challenge: new Uint8Array(32),
+                        challenge: crypto.getRandomValues(new Uint8Array(32)),
                         rp: {
                             name: 'Alorica Booking System',
                             id: window.location.hostname,
                         },
                         user: {
-                            id: new Uint8Array(16),
+                            id: userId,
                             name: username,
                             displayName: match.name,
                         },
@@ -2809,9 +2818,10 @@
                         ],
                         authenticatorSelection: {
                             authenticatorAttachment: 'platform',
-                            userVerification: 'preferred'
+                            userVerification: 'required'
                         },
-                        timeout: 60000
+                        timeout: 60000,
+                        excludeCredentials: [] // No existing credentials to exclude
                     };
 
                     const credential = await navigator.credentials.create(credentialCreationOptions);
