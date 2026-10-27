@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+dist/
+data/
+
+# Config files
+package-lock.json
+
+# Large files
+index.html
+presentation.html
+
+# Ignore everything in vendor
+vendor/*

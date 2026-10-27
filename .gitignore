@@ -4,6 +4,7 @@ dist/
 *.xlsx
 .env
 .env.local
+package-lock.json
 
 # Local HTTPS certificate — never commit the private key
 certs/
