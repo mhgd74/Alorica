@@ -1368,6 +1368,63 @@
                 {/* ================= BOOKINGS ================= */}
                 {adminView === 'bookings' && (
                     <>
+                    {/* Team Leader Quick Stats */}
+                    {isTeamLead && (
+                        <div className="max-w-4xl mx-auto mb-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+                            <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4 text-center border border-blue-200">
+                                <div className="flex items-center justify-center gap-2 mb-1">
+                                    <Icon name="calendar-check" size={20} className="text-alorica-blue" />
+                                    <p className="text-3xl font-black text-alorica-blue">{filteredBookings.length}</p>
+                                </div>
+                                <p className="text-xs text-gray-600 font-semibold">Total Bookings</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-2xl p-4 text-center border border-green-200">
+                                <div className="flex items-center justify-center gap-2 mb-1">
+                                    <Icon name="users" size={20} className="text-green-700" />
+                                    <p className="text-3xl font-black text-green-700">{uniqueEmployeeCount(filteredBookings)}</p>
+                                </div>
+                                <p className="text-xs text-gray-600 font-semibold">Employees</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-4 text-center border border-orange-200">
+                                <div className="flex items-center justify-center gap-2 mb-1">
+                                    <Icon name="bus" size={20} className="text-alorica-orange" />
+                                    <p className="text-3xl font-black text-alorica-orange">{buses.length}</p>
+                                </div>
+                                <p className="text-xs text-gray-600 font-semibold">Available Buses</p>
+                            </div>
+                            <div className={`rounded-2xl p-4 text-center border ${waitlistCount > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200'}`}>
+                                <div className="flex items-center justify-center gap-2 mb-1">
+                                    <Icon name="clock" size={20} className={waitlistCount > 0 ? 'text-red-600' : 'text-gray-600'} />
+                                    <p className={`text-3xl font-black ${waitlistCount > 0 ? 'text-red-600' : 'text-gray-600'}`}>{waitlistCount}</p>
+                                </div>
+                                <p className="text-xs text-gray-600 font-semibold">On Waitlist</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Admin Quick Stats */}
+                    {!isTeamLead && (
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 max-w-4xl mx-auto">
+                            <div className="bg-alorica-light rounded-2xl p-4 text-center">
+                                <p className="text-3xl font-black text-alorica-blue">{filteredBookings.length}</p>
+                                <p className="text-xs text-gray-500 mt-1">Bookings</p>
+                            </div>
+                            <div className="bg-alorica-light rounded-2xl p-4 text-center">
+                                <p className="text-3xl font-black text-alorica-blue">{dayGroups.length}</p>
+                                <p className="text-xs text-gray-500 mt-1">Days</p>
+                            </div>
+                            <div className="bg-alorica-light rounded-2xl p-4 text-center">
+                                <p className="text-3xl font-black text-alorica-blue">{uniqueEmployeeCount(filteredBookings)}</p>
+                                <p className="text-xs text-gray-500 mt-1">Employees</p>
+                            </div>
+                            <div className="bg-alorica-light rounded-2xl p-4 text-center">
+                                <p className={`text-3xl font-black ${waitlistCount ? 'text-red-600' : 'text-alorica-blue'}`}>{waitlistCount}</p>
+                                <p className="text-xs text-gray-500 mt-1">On waitlist</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Sheet Status */}
                     <div className="max-w-4xl mx-auto mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3">
                         <div className="flex items-center gap-3">
                             <Icon name="file-spreadsheet" size={18} className="text-alorica-blue shrink-0" />
@@ -1397,24 +1454,36 @@
                         )}
                     </div>
 
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 max-w-4xl mx-auto">
-                        <div className="bg-alorica-light rounded-2xl p-4 text-center">
-                            <p className="text-3xl font-black text-alorica-blue">{filteredBookings.length}</p>
-                            <p className="text-xs text-gray-500 mt-1">Bookings</p>
+                    {/* Team Leader Quick Actions */}
+                    {isTeamLead && (
+                        <div className="max-w-4xl mx-auto mb-6 grid grid-cols-2 lg:grid-cols-3 gap-3">
+                            <button
+                                type="button"
+                                onClick={onRedistribute}
+                                className="bg-white border-2 border-alorica-blue text-alorica-blue font-bold py-3 px-4 rounded-xl shadow hover:bg-alorica-light flex items-center justify-center gap-2 transition-all"
+                            >
+                                <Icon name="shuffle" size={18} /> Auto-assign Buses
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setAdminView('changes')}
+                                className={`font-bold py-3 px-4 rounded-xl shadow flex items-center justify-center gap-2 transition-all ${pendingChangeCount > 0 ? 'bg-alorica-orange text-white hover:shadow-lg' : 'bg-white border-2 border-gray-200 text-gray-600 hover:bg-gray-100'}`}
+                            >
+                                <Icon name="git-pull-request" size={18} />
+                                Change Requests
+                                {pendingChangeCount > 0 && (
+                                    <span className="bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5">{pendingChangeCount}</span>
+                                )}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setAdminView('buses')}
+                                className="bg-white border-2 border-alorica-blue text-alorica-blue font-bold py-3 px-4 rounded-xl shadow hover:bg-alorica-light flex items-center justify-center gap-2 transition-all"
+                            >
+                                <Icon name="settings" size={18} /> Manage Buses
+                            </button>
                         </div>
-                        <div className="bg-alorica-light rounded-2xl p-4 text-center">
-                            <p className="text-3xl font-black text-alorica-blue">{dayGroups.length}</p>
-                            <p className="text-xs text-gray-500 mt-1">Days</p>
-                        </div>
-                        <div className="bg-alorica-light rounded-2xl p-4 text-center">
-                            <p className="text-3xl font-black text-alorica-blue">{uniqueEmployeeCount(filteredBookings)}</p>
-                            <p className="text-xs text-gray-500 mt-1">Employees</p>
-                        </div>
-                        <div className="bg-alorica-light rounded-2xl p-4 text-center">
-                            <p className={`text-3xl font-black ${waitlistCount ? 'text-red-600' : 'text-alorica-blue'}`}>{waitlistCount}</p>
-                            <p className="text-xs text-gray-500 mt-1">On waitlist</p>
-                        </div>
-                    </div>
+                    )}
 
                     {/* Filters */}
                     <div className="max-w-4xl mx-auto mb-6 bg-gray-50 border border-gray-100 rounded-2xl p-4">
@@ -1464,15 +1533,6 @@
                                         className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors"
                                     >
                                         Clear filters
-                                    </button>
-                                )}
-                                {isTeamLead && (
-                                    <button
-                                        type="button"
-                                        onClick={onRedistribute}
-                                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
-                                    >
-                                        <Icon name="shuffle" size={14} /> Auto-assign buses
                                     </button>
                                 )}
                             </div>
