@@ -67,15 +67,32 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for the local static assets.
+  // Cache-first for icons and CSS (most likely to be used frequently)
+  const isIcon = url.pathname.match(/icon-\d+x\d+\.png$/);
+  const isCSS = url.pathname.endsWith('.css');
+
+  if (isIcon || isCSS) {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(request, copy));
+          return response;
+        });
+      })
+    );
+    return;
+  }
+
+  // Network-first for other assets (vendor libraries, etc.)
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
+    fetch(request)
+      .then((response) => {
         const copy = response.clone();
         caches.open(CACHE).then((cache) => cache.put(request, copy));
         return response;
-      });
-    })
+      })
+      .catch(() => caches.match(request))
   );
 });

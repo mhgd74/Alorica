@@ -1,7 +1,7 @@
 {
   "name": "Alorica Booking System",
   "short_name": "Alorica",
-  "description": "Employee transportation booking system for Alorica",
+  "description": "Employee transportation booking system for Alorica - Book your rides with ease",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -9,6 +9,20 @@
   "background_color": "#E6F0F7",
   "theme_color": "#00385F",
   "categories": ["business", "productivity", "transportation"],
+  "screenshots": [
+    {
+      "src": "screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide"
+    },
+    {
+      "src": "screenshot-narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow"
+    }
+  ],
   "icons": [
     {
       "src": "icon-72x72.png",

@@ -15,23 +15,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        alorica: {
-                            blue: '#00385F',
-                            orange: '#F58220',
-                            light: '#E6F0F7',
-                        }
-                    }
-                }
-            }
-        }
-    </script>
-
     <!-- Libraries are served locally so the system works on the company network / offline -->
     <script src="vendor/tailwind.js"></script>
     <script src="vendor/react.production.min.js"></script>
@@ -39,6 +22,9 @@
     <script src="vendor/babel.min.js"></script>
     <script src="vendor/lucide.js"></script>
     <script src="vendor/xlsx.bundle.js"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
     <script>
         tailwind.config = {
             theme: {
@@ -1342,9 +1328,7 @@
             importing, setImporting, onExportBackup, onImportBackup,
             role, onSubmitToAdmin, pendingReviewCount,
             sheetStatus, sheet, onSendBack, onOverrideRequest,
-            pendingChangeCount,
-            darkMode, setDarkMode, language, setLanguage, pwaIconMode, setPwaIconMode,
-            pwdForm, setPwdForm, pwdFeedback, setPwdFeedback
+            pendingChangeCount
         }) => {
             const isTeamLead = role === 'teamlead';
             const isAdmin = role === 'admin';
@@ -2264,27 +2248,6 @@
                     </div>
                 )}
 
-                {/* ================= SETTINGS ================= */}
-                {adminView === 'settings' && (
-                    <Settings
-                        darkMode={darkMode}
-                        setDarkMode={setDarkMode}
-                        language={language}
-                        setLanguage={setLanguage}
-                        pwaIconMode={pwaIconMode}
-                        setPwaIconMode={setPwaIconMode}
-                        currentUser={currentUser}
-                        pwdForm={pwdForm}
-                        setPwdForm={setPwdForm}
-                        pwdFeedback={pwdFeedback}
-                        setPwdFeedback={setPwdFeedback}
-                        onSubmit={(e) => {
-                            e.preventDefault();
-                            handleChangePassword();
-                        }}
-                    />
-                )}
-
                 </div>
             </div>
             );
@@ -2341,149 +2304,6 @@
                 );
             }
         }
-
-        const Sidebar = ({ isOpen, onClose, darkMode, setDarkMode, language, setLanguage, pwaIconMode, setPwaIconMode, onLogout }) => (
-            <div className={`fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-gray-800 shadow-2xl sidebar ${isOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
-                <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-                    <div className="flex items-center justify-between">
-                        <img src="logo.png" alt="Alorica" className="h-8" />
-                        <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-                            <Icon name="x" size={20} />
-                        </button>
-                    </div>
-                </div>
-                <div className="p-4 space-y-4">
-                    <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                        <span className="text-sm font-medium">Dark Mode</span>
-                        <button
-                            onClick={() => setDarkMode(!darkMode)}
-                            className={`w-12 h-6 rounded-full transition-colors ${darkMode ? 'bg-alorica-orange' : 'bg-gray-300'}`}
-                        >
-                            <div className={`w-5 h-5 bg-white rounded-full shadow transform transition-transform ${darkMode ? 'translate-x-6' : 'translate-x-1'}`} />
-                        </button>
-                    </div>
-                    <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                        <span className="text-sm font-medium block mb-2">Language</span>
-                        <select
-                            value={language}
-                            onChange={(e) => setLanguage(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
-                        >
-                            <option value="en">English</option>
-                            <option value="ar">العربية</option>
-                        </select>
-                    </div>
-                    <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                        <span className="text-sm font-medium block mb-2">PWA Icon</span>
-                        <select
-                            value={pwaIconMode}
-                            onChange={(e) => setPwaIconMode(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
-                        >
-                            <option value="light">Light</option>
-                            <option value="dark">Dark</option>
-                        </select>
-                    </div>
-                    <button
-                        onClick={onLogout}
-                        className="w-full p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg font-medium hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
-                    >
-                        Sign Out
-                    </button>
-                </div>
-            </div>
-        );
-
-        const Settings = ({ darkMode, setDarkMode, language, setLanguage, pwaIconMode, setPwaIconMode, currentUser, pwdForm, setPwdForm, pwdFeedback, setPwdFeedback, onSubmit }) => (
-            <div className="max-w-2xl mx-auto">
-                <h2 className="text-2xl font-bold text-alorica-blue mb-6">Settings</h2>
-                <div className="space-y-6">
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700">
-                        <h3 className="text-lg font-semibold mb-4">Appearance</h3>
-                        <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                                <span className="text-sm font-medium">Dark Mode</span>
-                                <button
-                                    onClick={() => setDarkMode(!darkMode)}
-                                    className={`w-12 h-6 rounded-full transition-colors ${darkMode ? 'bg-alorica-orange' : 'bg-gray-300'}`}
-                                >
-                                    <div className={`w-5 h-5 bg-white rounded-full shadow transform transition-transform ${darkMode ? 'translate-x-6' : 'translate-x-1'}`} />
-                                </button>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-2">Language</label>
-                                <select
-                                    value={language}
-                                    onChange={(e) => setLanguage(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
-                                >
-                                    <option value="en">English</option>
-                                    <option value="ar">العربية</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-2">PWA Icon Style</label>
-                                <select
-                                    value={pwaIconMode}
-                                    onChange={(e) => setPwaIconMode(e.target.value)}
-                                    className="w-full px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
-                                >
-                                    <option value="light">Light Icon</option>
-                                    <option value="dark">Dark Icon</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700">
-                        <h3 className="text-lg font-semibold mb-4">Change Password</h3>
-                        <form onSubmit={onSubmit} className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Current Password</label>
-                                <input
-                                    type="password"
-                                    className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg"
-                                    value={pwdForm.current}
-                                    onChange={(e) => setPwdForm({ ...pwdForm, current: e.target.value })}
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">New Password</label>
-                                <input
-                                    type="password"
-                                    className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg"
-                                    value={pwdForm.next}
-                                    onChange={(e) => setPwdForm({ ...pwdForm, next: e.target.value })}
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Confirm New Password</label>
-                                <input
-                                    type="password"
-                                    className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg"
-                                    value={pwdForm.confirm}
-                                    onChange={(e) => setPwdForm({ ...pwdForm, confirm: e.target.value })}
-                                />
-                            </div>
-                            {pwdFeedback.text && (
-                                <p className={`text-sm font-medium rounded-lg px-4 py-3 ${
-                                    pwdFeedback.type === 'error'
-                                        ? 'bg-red-50 text-red-600 border border-red-100'
-                                        : 'bg-green-50 text-green-700 border border-green-100'
-                                }`}>
-                                    {pwdFeedback.text}
-                                </p>
-                            )}
-                            <button
-                                type="submit"
-                                className="w-full bg-alorica-blue hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg shadow-lg"
-                            >
-                                Update Password
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        );
 
         // In-app confirmation dialog (window.confirm cannot be styled).
         const ConfirmDialog = ({ message, onConfirm, onCancel }) => (
@@ -2700,6 +2520,7 @@
                 const saved = localStorage.getItem('rememberMe');
                 return saved === 'true';
             });
+            const [isOnline, setIsOnline] = useState(navigator.onLine);
             const [error, setError] = useState('');
             const [activeTab, setActiveTab] = useState('arrival');
             const [bookings, setBookings] = useState(() => loadJSON(STORAGE.bookings, []));
@@ -2723,19 +2544,6 @@
             const [newBus, setNewBus] = useState({ name: '', capacity: '' });
             const [userFeedback, setUserFeedback] = useState({ type: '', text: '' });
             const [busFeedback, setBusFeedback] = useState({ type: '', text: '' });
-            const [darkMode, setDarkMode] = useState(() => {
-                const saved = localStorage.getItem('darkMode');
-                return saved === 'true';
-            });
-            const [sidebarOpen, setSidebarOpen] = useState(false);
-            const [language, setLanguage] = useState(() => {
-                const saved = localStorage.getItem('language');
-                return saved || 'en';
-            });
-            const [pwaIconMode, setPwaIconMode] = useState(() => {
-                const saved = localStorage.getItem('pwaIconMode');
-                return saved || 'light';
-            });
             const [sharing, setSharing] = useState(false);
             const [toasts, setToasts] = useState([]);
             const [filters, setFilters] = useState({ q: '', from: '', to: '' });
@@ -2870,22 +2678,6 @@
                 };
             }, []);
 
-            /* ------------------ dark mode & language ------------------ */
-            useEffect(() => {
-                document.documentElement.classList.toggle('dark', darkMode);
-                localStorage.setItem('darkMode', darkMode.toString());
-            }, [darkMode]);
-
-            useEffect(() => {
-                document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
-                document.documentElement.lang = language;
-                localStorage.setItem('language', language);
-            }, [language]);
-
-            useEffect(() => {
-                localStorage.setItem('pwaIconMode', pwaIconMode);
-            }, [pwaIconMode]);
-
             /* ------------------ auto-login from saved session ------------------ */
             useEffect(() => {
                 const session = localStorage.getItem('session');
@@ -2911,6 +2703,20 @@
                     }
                 }
             }, [allUsers]);
+
+            /* ------------------ online/offline detection ------------------ */
+            useEffect(() => {
+                const handleOnline = () => setIsOnline(true);
+                const handleOffline = () => setIsOnline(false);
+
+                window.addEventListener('online', handleOnline);
+                window.addEventListener('offline', handleOffline);
+
+                return () => {
+                    window.removeEventListener('online', handleOnline);
+                    window.removeEventListener('offline', handleOffline);
+                };
+            }, []);
 
             /* ------------------ expiring change requests ------------------
              * A request the employee never answers must not block the
@@ -4072,7 +3878,6 @@
             const adminTabs = [
                 { key: 'bookings', label: isTeamLead ? 'Review Bookings' : 'Bookings', icon: 'calendar-check' },
                 { key: 'changes', label: 'Change Requests', icon: 'git-pull-request', badge: pendingChangeCount },
-                { key: 'settings', label: 'Settings', icon: 'settings' },
                 ...(isAdmin ? [
                     { key: 'buses', label: 'Buses', icon: 'bus' },
                     { key: 'users', label: 'Users', icon: 'users' },
@@ -4116,6 +3921,17 @@
             return (
                 <>
                 <Toasts toasts={toasts} />
+
+                {/* Offline Banner */}
+                {!isOnline && (
+                    <div className="fixed top-0 left-0 right-0 bg-red-500 text-white text-center py-2 px-4 z-[200] text-sm font-medium">
+                        <div className="flex items-center justify-center gap-2">
+                            <Icon name="wifi-off" size={16} />
+                            <span>You are offline. Some features may be limited.</span>
+                        </div>
+                    </div>
+                )}
+
                 {confirmRequest && (
                     <ConfirmDialog
                         message={confirmRequest.message}
@@ -4215,13 +4031,6 @@
                                 pendingRequest={(requestId) => changeRequests.find((r) => r.id === requestId && r.status === 'pending')}
                             />
                             <button
-                                onClick={() => setSidebarOpen(true)}
-                                className="p-1.5 sm:p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-600 dark:text-gray-300 transition-colors"
-                                title="Menu"
-                            >
-                                <Icon name="menu" size={20} className="sm:w-6 sm:h-6" />
-                            </button>
-                            <button
                                 onClick={handleSignOut}
                                 className="p-1.5 sm:p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
                                 title="Sign out"
@@ -4230,19 +4039,6 @@
                             </button>
                         </div>
                     </nav>
-
-                    {/* Sidebar */}
-                    <Sidebar
-                        isOpen={sidebarOpen}
-                        onClose={() => setSidebarOpen(false)}
-                        darkMode={darkMode}
-                        setDarkMode={setDarkMode}
-                        language={language}
-                        setLanguage={setLanguage}
-                        pwaIconMode={pwaIconMode}
-                        setPwaIconMode={setPwaIconMode}
-                        onLogout={handleSignOut}
-                    />
 
                     <main className={`${showDashboard ? 'max-w-6xl' : 'max-w-4xl'} mx-auto p-4 sm:p-6 mt-6 sm:mt-8 fade-in`}>
                         {showDashboard ? (
@@ -4302,16 +4098,6 @@
                             onSendBack={handleSendBackToLeader}
                             onOverrideRequest={setOverrideRequest}
                             pendingChangeCount={pendingChangeCount}
-                            darkMode={darkMode}
-                            setDarkMode={setDarkMode}
-                            language={language}
-                            setLanguage={setLanguage}
-                            pwaIconMode={pwaIconMode}
-                            setPwaIconMode={setPwaIconMode}
-                            pwdForm={pwdForm}
-                            setPwdForm={setPwdForm}
-                            pwdFeedback={pwdFeedback}
-                            setPwdFeedback={setPwdFeedback}
                         />
                         ) : (
                         /* ================= REGULAR USER ================= */
