@@ -887,10 +887,7 @@
             formData, setFormData,
             selectedRoad, setSelectedRoad,
             onSubmit,
-            dropOffLabel, dropOffIcon, timeLabel,
-            onVoiceInput,
-            isListening,
-            speechField
+            dropOffLabel, dropOffIcon, timeLabel
         }) => {
             const shiftSlots = activeTab === 'arrival' ? SHIFT_SLOTS.arrival : SHIFT_SLOTS.departure;
 
@@ -931,15 +928,6 @@
                         <div>
                             <label className="flex flex-wrap items-center justify-between text-alorica-blue font-bold mb-2 gap-2">
                                 <span className="flex items-center gap-2"><Icon name={dropOffIcon} size={18} className="text-alorica-orange" /> {dropOffLabel}</span>
-                                {('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) && (
-                                    <button
-                                        type="button"
-                                        onClick={() => onVoiceInput('location')}
-                                        className={`text-xs font-semibold px-2 py-1 rounded-lg transition-colors ${isListening && speechField === 'location' ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                                    >
-                                        <Icon name={isListening && speechField === 'location' ? 'mic-off' : 'mic'} size={14} />
-                                    </button>
-                                )}
                             </label>
 
                             {/* Road Selection Buttons */}
@@ -2801,50 +2789,6 @@
                 [allUsers]
             );
 
-            // Voice booking using Web Speech API
-            const [isListening, setIsListening] = useState(false);
-            const [speechField, setSpeechField] = useState(null);
-
-            const startVoiceInput = (field) => {
-                if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-                    pushToast('Voice input is not supported on this browser', 'error');
-                    return;
-                }
-
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                const recognition = new SpeechRecognition();
-                
-                recognition.continuous = false;
-                recognition.interimResults = false;
-                recognition.lang = 'en-US';
-
-                recognition.onstart = () => {
-                    setIsListening(true);
-                    setSpeechField(field);
-                };
-
-                recognition.onresult = (event) => {
-                    const transcript = event.results[0][0].transcript;
-                    setFormData(prev => ({ ...prev, [field]: transcript }));
-                    setIsListening(false);
-                    setSpeechField(null);
-                };
-
-                recognition.onerror = (event) => {
-                    console.error('Speech recognition error:', event.error);
-                    setIsListening(false);
-                    setSpeechField(null);
-                    pushToast('Voice input failed. Please try again.', 'error');
-                };
-
-                recognition.onend = () => {
-                    setIsListening(false);
-                    setSpeechField(null);
-                };
-
-                recognition.start();
-            };
-
             const handleLogin = async (e) => {
                 e.preventDefault();
 
@@ -4074,9 +4018,6 @@
                                 dropOffLabel={dropOffLabel}
                                 dropOffIcon={dropOffIcon}
                                 timeLabel={timeLabel}
-                                onVoiceInput={startVoiceInput}
-                                isListening={isListening}
-                                speechField={speechField}
                             />
                             <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} canSelfApprove={isTeamLead} />
                         </div>
