@@ -26,6 +26,8 @@ const COLLECTIONS = [
   'buses',
   'audit',
   'sheet',
+  'vacations',
+  'vacationBalances',
 ];
 
 /* =============================================================
