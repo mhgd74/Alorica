@@ -2813,7 +2813,7 @@
                         challenge: crypto.getRandomValues(new Uint8Array(32)),
                         rp: {
                             name: 'Alorica Booking System',
-                            id: window.location.hostname,
+                            id: 'localhost', // Use localhost for local development
                         },
                         user: {
                             id: userId,
