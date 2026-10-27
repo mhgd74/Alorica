@@ -2785,12 +2785,18 @@
                     return;
                 }
 
+                // Check if already has biometric enabled
+                if (match.webauthnId) {
+                    setError('Biometric login is already enabled for this account');
+                    return;
+                }
+
                 try {
                     const credentialCreationOptions = {
                         challenge: new Uint8Array(32),
                         rp: {
                             name: 'Alorica Booking System',
-                            id: 'alorica-booking',
+                            id: window.location.hostname,
                         },
                         user: {
                             id: new Uint8Array(16),
@@ -2820,7 +2826,7 @@
                     }
                 } catch (err) {
                     console.error('Biometric registration error:', err);
-                    setError('Failed to enable biometric login. Your device may not support it.');
+                    setError('Failed to enable biometric login: ' + (err.message || 'Your device may not support it'));
                 }
             };
 
@@ -2830,42 +2836,52 @@
 
             const startVoiceInput = (field) => {
                 if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-                    pushToast('Voice input is not supported on this browser', 'error');
+                    pushToast('Voice input is not supported on this browser (try Chrome or Edge)', 'error');
                     return;
                 }
 
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                const recognition = new SpeechRecognition();
-                
-                recognition.continuous = false;
-                recognition.interimResults = false;
-                recognition.lang = 'en-US';
+                try {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    const recognition = new SpeechRecognition();
+                    
+                    recognition.continuous = false;
+                    recognition.interimResults = false;
+                    recognition.lang = 'en-US';
 
-                recognition.onstart = () => {
-                    setIsListening(true);
-                    setSpeechField(field);
-                };
+                    recognition.onstart = () => {
+                        setIsListening(true);
+                        setSpeechField(field);
+                        pushToast('Listening... Speak now', 'info');
+                    };
 
-                recognition.onresult = (event) => {
-                    const transcript = event.results[0][0].transcript;
-                    setFormData(prev => ({ ...prev, [field]: transcript }));
-                    setIsListening(false);
-                    setSpeechField(null);
-                };
+                    recognition.onresult = (event) => {
+                        if (event.results && event.results.length > 0) {
+                            const transcript = event.results[0][0].transcript;
+                            console.log('Speech result:', transcript);
+                            setFormData(prev => ({ ...prev, [field]: transcript }));
+                            pushToast('Voice input captured!', 'success');
+                        }
+                        setIsListening(false);
+                        setSpeechField(null);
+                    };
 
-                recognition.onerror = (event) => {
-                    console.error('Speech recognition error:', event.error);
-                    setIsListening(false);
-                    setSpeechField(null);
-                    pushToast('Voice input failed. Please try again.', 'error');
-                };
+                    recognition.onerror = (event) => {
+                        console.error('Speech recognition error:', event.error);
+                        setIsListening(false);
+                        setSpeechField(null);
+                        pushToast('Voice input failed: ' + event.error, 'error');
+                    };
 
-                recognition.onend = () => {
-                    setIsListening(false);
-                    setSpeechField(null);
-                };
+                    recognition.onend = () => {
+                        setIsListening(false);
+                        setSpeechField(null);
+                    };
 
-                recognition.start();
+                    recognition.start();
+                } catch (err) {
+                    console.error('Speech recognition init error:', err);
+                    pushToast('Failed to start voice input', 'error');
+                }
             };
 
             const handleLogin = async (e) => {
