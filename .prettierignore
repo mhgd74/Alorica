@@ -13,5 +13,8 @@ package-lock.json
 index.html
 presentation.html
 
+# CSS files (handled separately)
+styles.css
+
 # Ignore everything in vendor
 vendor/*

@@ -140,6 +140,7 @@ React 18 (UMD) · Babel Standalone (ترجمة داخل المتصفح) · Tailw
 
 ```
 index.html              # التطبيق كامل (React + Babel داخل المتصفح)
+styles.css              # التنسيقات المخصصة للواجهة
 server.js               # سيرفر محلي: ملفات ثابتة + /api/*  (HTTP 3080، HTTPS 3000)
 sw.js                   # Service Worker (يستثني /api/ من الكاش)
 manifest.json           # بيانات PWA
@@ -147,7 +148,7 @@ logo.png                # شعار Alorica
 vendor/                 # المكتبات المستضافة محلياً
 supabase/migrations/    # مخطط قاعدة البيانات (Postgres) — مفعّل ✅
 api/                    # Vercel API Functions للربط مع Supabase
-lib/                    # مكتبات المساعدة (supabase.js)
+lib/                    # مكتبات المساعدة (supabase.js, cors.js)
 vercel.json             # إعدادات نشر Vercel
 .vercelignore           # استثناءات رفع Vercel
 presentation.html       # عرض تقديمي للإدارة (مقارنة النظام القديم بالجديد)
