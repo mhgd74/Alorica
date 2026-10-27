@@ -1,11 +1,20 @@
 /* Alorica Booking System — offline cache */
-const CACHE = 'alorica-v2';
+const CACHE = 'alorica-v3';
 
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
+  './styles.css',
   './logo.png',
+  './icon-72x72.png',
+  './icon-96x96.png',
+  './icon-128x128.png',
+  './icon-144x144.png',
+  './icon-152x152.png',
+  './icon-192x192.png',
+  './icon-384x384.png',
+  './icon-512x512.png',
   './vendor/tailwind.js',
   './vendor/react.production.min.js',
   './vendor/react-dom.production.min.js',
