@@ -2773,6 +2773,8 @@
 
             // Register biometric credential
             const handleRegisterBiometric = async () => {
+                console.log('Starting biometric registration...');
+                
                 if (!window.PublicKeyCredential) {
                     setError('Biometric login is not supported on this device');
                     return;
@@ -2780,6 +2782,8 @@
 
                 // Use current user if logged in, otherwise use login form username
                 const username = isLoggedIn ? currentUser.username : loginData.username.trim();
+                console.log('Username:', username);
+                
                 const match = allUsers.find((u) => u.username === username);
                 if (!match) {
                     setError('User not found');
@@ -2793,6 +2797,8 @@
                 }
 
                 try {
+                    pushToast('Registering biometric...', 'info');
+                    
                     // Create a unique user ID from username
                     const userIdBuffer = new TextEncoder().encode(username);
                     const userId = new Uint8Array(userIdBuffer.slice(0, 16));
@@ -2824,10 +2830,13 @@
                         excludeCredentials: [] // No existing credentials to exclude
                     };
 
+                    console.log('Creating credential...');
                     const credential = await navigator.credentials.create(credentialCreationOptions);
+                    console.log('Credential created:', credential);
                     
                     if (credential) {
                         const webauthnId = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
+                        console.log('WebAuthn ID:', webauthnId);
                         
                         // Save webauthnId to user data
                         const updatedUser = { ...match, webauthnId };
@@ -2842,7 +2851,7 @@
                     }
                 } catch (err) {
                     console.error('Biometric registration error:', err);
-                    setError('Failed to enable biometric login: ' + (err.message || 'Your device may not support it'));
+                    pushToast('Biometric registration failed: ' + (err.message || 'Unknown error'), 'error');
                 }
             };
 
