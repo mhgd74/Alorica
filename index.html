@@ -2813,7 +2813,7 @@
                         challenge: crypto.getRandomValues(new Uint8Array(32)),
                         rp: {
                             name: 'Alorica Booking System',
-                            id: 'aloricav1.vercel.app', // Must match the actual domain
+                            // Let browser determine rp.id automatically
                         },
                         user: {
                             id: userId,
