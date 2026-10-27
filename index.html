@@ -2822,16 +2822,17 @@
                         },
                         pubKeyCredParams: [
                             { type: 'public-key', alg: -7 }, // ES256
+                            { type: 'public-key', alg: -257 } // RS256 as fallback
                         ],
                         authenticatorSelection: {
                             authenticatorAttachment: 'platform',
-                            userVerification: 'required'
+                            userVerification: 'discouraged'
                         },
                         timeout: 60000,
                         excludeCredentials: [] // No existing credentials to exclude
                     };
 
-                    console.log('Creating credential...');
+                    console.log('Creating credential with options:', credentialCreationOptions);
                     const credential = await navigator.credentials.create(credentialCreationOptions);
                     console.log('Credential created:', credential);
                     
