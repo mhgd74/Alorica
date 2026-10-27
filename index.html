@@ -2568,31 +2568,37 @@
                 // browser already had, so nothing built up before the server
                 // existed is lost.
                 const bootstrap = async () => {
-                    const state = await (await fetch('/api/state', { cache: 'no-store' })).json();
-                    if (state.rev !== 0) {
-                        SYNC.rev = state.rev;
-                        return state.collections;
-                    }
+                    try {
+                        const state = await (await fetch('/api/state', { cache: 'no-store' })).json();
+                        if (state.rev !== 0) {
+                            SYNC.rev = state.rev;
+                            return state.collections;
+                        }
 
-                    const ops = Object.keys(STORAGE).map((name) => ({
-                        collection: name,
-                        replace: true,
-                        upsert: loadJSON(STORAGE[name], [])
-                    }));
-                    const res = await fetch('/api/seed', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ops })
-                    });
-                    if (res.status === 409) {
-                        // Another device seeded first — take its data instead.
-                        const fresh = await (await fetch('/api/state', { cache: 'no-store' })).json();
-                        SYNC.rev = fresh.rev;
-                        return fresh.collections;
+                        const ops = Object.keys(STORAGE).map((name) => ({
+                            collection: name,
+                            replace: true,
+                            upsert: loadJSON(STORAGE[name], [])
+                        }));
+                        const res = await fetch('/api/seed', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ops })
+                        });
+                        if (res.status === 409) {
+                            // Another device seeded first — take its data instead.
+                            const fresh = await (await fetch('/api/state', { cache: 'no-store' })).json();
+                            SYNC.rev = fresh.rev;
+                            return fresh.collections;
+                        }
+                        if (!res.ok) throw new Error(`seed failed (${res.status})`);
+                        SYNC.rev = (await res.json()).rev;
+                        return null;
+                    } catch (err) {
+                        console.error('Bootstrap error:', err);
+                        // Return null to indicate we couldn't bootstrap, but continue anyway
+                        return null;
                     }
-                    if (!res.ok) throw new Error(`seed failed (${res.status})`);
-                    SYNC.rev = (await res.json()).rev;
-                    return null;
                 };
 
                 const pull = async () => {
@@ -2609,6 +2615,7 @@
                         // Stay "offline" while work is still waiting to be accepted.
                         if (SYNC.pending.size === 0) syncSetOnline(true);
                     } catch (err) {
+                        console.error('Pull error:', err);
                         syncSetOnline(false);
                     }
                 };
@@ -2618,7 +2625,10 @@
                         if (collections) applyServerState(collections);
                         syncSetOnline(true);
                     })
-                    .catch(() => syncSetOnline(false));
+                    .catch((err) => {
+                        console.error('Bootstrap catch error:', err);
+                        syncSetOnline(false);
+                    });
 
                 const timer = setInterval(pull, 3000);
                 const onWake = () => { if (document.visibilityState === 'visible') pull(); };
