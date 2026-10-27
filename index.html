@@ -1308,7 +1308,8 @@
             pendingChanges, auditLog,
             importing, setImporting, onExportBackup, onImportBackup,
             role, onSubmitToAdmin, pendingReviewCount,
-            sheetStatus, sheet, onSendBack, onOverrideRequest
+            sheetStatus, sheet, onSendBack, onOverrideRequest,
+            pendingChangeCount
         }) => {
             const isTeamLead = role === 'teamlead';
             const isAdmin = role === 'admin';
@@ -4001,6 +4002,7 @@
                             sheet={sheet}
                             onSendBack={handleSendBackToLeader}
                             onOverrideRequest={setOverrideRequest}
+                            pendingChangeCount={pendingChangeCount}
                         />
                         ) : (
                         /* ================= REGULAR USER ================= */
