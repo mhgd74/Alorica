@@ -2822,12 +2822,7 @@
                         },
                         pubKeyCredParams: [
                             { type: 'public-key', alg: -7 }, // ES256
-                            { type: 'public-key', alg: -257 } // RS256 as fallback
                         ],
-                        authenticatorSelection: {
-                            authenticatorAttachment: 'platform',
-                            userVerification: 'discouraged'
-                        },
                         timeout: 60000,
                         excludeCredentials: [] // No existing credentials to exclude
                     };
