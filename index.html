@@ -2510,6 +2510,10 @@
             const [isLoggedIn, setIsLoggedIn] = useState(false);
             const [currentUser, setCurrentUser] = useState(null);
             const [loginData, setLoginData] = useState({ username: '', password: '' });
+            const [rememberMe, setRememberMe] = useState(() => {
+                const saved = localStorage.getItem('rememberMe');
+                return saved === 'true';
+            });
             const [error, setError] = useState('');
             const [activeTab, setActiveTab] = useState('arrival');
             const [bookings, setBookings] = useState(() => loadJSON(STORAGE.bookings, []));
@@ -2666,6 +2670,32 @@
                     SYNC.listeners.delete(listener);
                 };
             }, []);
+
+            /* ------------------ auto-login from saved session ------------------ */
+            useEffect(() => {
+                const session = localStorage.getItem('session');
+                if (session) {
+                    try {
+                        const { username, expiresAt } = JSON.parse(session);
+                        if (expiresAt > Date.now()) {
+                            // Session is still valid, auto-login
+                            const match = allUsers.find((u) => u.username === username);
+                            if (match) {
+                                setCurrentUser(match);
+                                setIsLoggedIn(true);
+                            }
+                        } else {
+                            // Session expired, clear it
+                            localStorage.removeItem('session');
+                            localStorage.removeItem('rememberMe');
+                            setRememberMe(false);
+                        }
+                    } catch (err) {
+                        // Invalid session data, clear it
+                        localStorage.removeItem('session');
+                    }
+                }
+            }, [allUsers]);
 
             /* ------------------ expiring change requests ------------------
              * A request the employee never answers must not block the
@@ -2836,6 +2866,20 @@
                     return;
                 }
 
+                // Save remember me preference
+                localStorage.setItem('rememberMe', rememberMe.toString());
+
+                // Save session with expiration if remember me is checked
+                if (rememberMe) {
+                    const expiresAt = Date.now() + (30 * 24 * 60 * 60 * 1000); // 30 days
+                    localStorage.setItem('session', JSON.stringify({
+                        username: user.username,
+                        expiresAt: expiresAt
+                    }));
+                } else {
+                    localStorage.removeItem('session');
+                }
+
                 setIsLoggedIn(true);
                 setCurrentUser(user);
                 setError('');
@@ -2990,6 +3034,10 @@
                 setPwdForm({ next: '', confirm: '' });
                 setPwdFeedback({ type: '', text: '' });
                 setLoginNotice('');
+                // Clear session on sign out
+                localStorage.removeItem('session');
+                localStorage.removeItem('rememberMe');
+                setRememberMe(false);
             };
 
             /* ------------------ booking ------------------ */
@@ -3827,6 +3875,8 @@
                         notice={loginNotice}
                         onSubmit={handleLogin}
                         onForgotPassword={handleForgotPassword}
+                        rememberMe={rememberMe}
+                        setRememberMe={setRememberMe}
                     />
                 );
             }
