@@ -3794,6 +3794,23 @@
                 const vacation = vacations.find(v => v.id === id);
                 if (!vacation) return;
 
+                // Other requests may have been approved since this one arrived, so the
+                // balance has to be re-checked right before the leave is actually granted.
+                const currentBalance = vacationBalances.find(b => b.employeeId === vacation.employeeId)
+                    || freshVacationBalance(vacation.employeeId);
+                const availableDays = vacation.type === 'annual' ? currentBalance.annual - currentBalance.usedAnnual
+                    : vacation.type === 'sick' ? currentBalance.sick - currentBalance.usedSick
+                    : vacation.type === 'personal' ? currentBalance.personal - currentBalance.usedPersonal
+                    : Infinity;
+
+                if (vacation.days > availableDays) {
+                    pushToast(
+                        `Cannot approve — only ${availableDays} day(s) of ${VACATION_TYPES[vacation.type]?.label || vacation.type} left for ${vacation.employeeName || vacation.employeeId}.`,
+                        'error'
+                    );
+                    return;
+                }
+
                 // Update vacation status
                 const updatedVacations = vacations.map(v => 
                     v.id === id 
@@ -3820,7 +3837,45 @@
                 else if (vacation.type === 'personal') balance.usedPersonal += vacation.days;
 
                 setVacationBalances(updatedBalances);
-                pushToast('Leave request approved.', 'success');
+
+                // The employee is away on those dates, so their own bookings inside the
+                // range cannot stand any more — the seats go back to the pool.
+                let promoted = 0;
+                const clashing = bookings.filter(
+                    (b) => b.employeeId === vacation.employeeId
+                        && b.date >= vacation.startDate
+                        && b.date <= vacation.endDate
+                );
+
+                if (clashing.length) {
+                    const remaining = bookings.filter((b) => !clashing.includes(b));
+                    const next = redistribute(remaining, buses);
+                    promoted = countPromotions(remaining, next);
+                    setBookings(next);
+                    notifyBusChanges(remaining, next);
+
+                    notify(
+                        vacation.employeeId,
+                        'Bookings cancelled for your leave',
+                        `${clashing.length} booking(s) inside your approved leave (${vacation.startDate} to ${vacation.endDate}) were cancelled: ${clashing.map((b) => `${b.date} ${formatTime12h(b.time)}`).join(', ')}.`,
+                        { kind: 'info' }
+                    );
+                }
+
+                logAudit(
+                    'vacation.approve',
+                    `${vacation.employeeName || vacation.employeeId} — ${vacation.startDate} → ${vacation.endDate}`,
+                    clashing.length
+                        ? `${clashing.length} conflicting booking(s) cancelled, ${promoted} waitlisted employee(s) promoted`
+                        : 'No conflicting bookings'
+                );
+
+                pushToast(
+                    clashing.length
+                        ? `Leave approved. ${clashing.length} conflicting booking(s) cancelled.`
+                        : 'Leave request approved.',
+                    'success'
+                );
 
                 // Notify employee
                 notify(
