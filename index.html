@@ -3216,7 +3216,14 @@
                     }
                 };
 
+                // A poll takes a moment, and the 3s timer can fire again before
+                // the previous one settled, so only one is allowed in flight.
+                let pulling = false;
+                let failedPolls = 0;
+
                 const pull = async () => {
+                    if (pulling) return;
+                    pulling = true;
                     try {
                         const { rev } = await (await apiFetch('/api/rev', { cache: 'no-store' })).json();
                         // A batch can fail without the revision moving, so push any
@@ -3227,11 +3234,23 @@
                             SYNC.rev = state.rev;
                             applyServerState(state.collections);
                         }
+                        failedPolls = 0;
                         // Stay "offline" while work is still waiting to be accepted.
                         if (SYNC.pending.size === 0) syncSetOnline(true);
                     } catch (err) {
-                        console.error('Pull error:', err);
-                        syncSetOnline(false);
+                        if (cancelled) return;
+                        // The browser cancels a request whenever the page is
+                        // reloaded or the tab is torn down, which looks exactly
+                        // like an unreachable server. One failed poll is
+                        // therefore treated as a hiccup the next attempt will
+                        // fix; only a second one in a row raises the banner.
+                        failedPolls += 1;
+                        if (failedPolls > 1) {
+                            console.warn('Sync is not reachable:', err.message);
+                            syncSetOnline(false);
+                        }
+                    } finally {
+                        pulling = false;
                     }
                 };
 
