@@ -1254,7 +1254,7 @@
             );
         };
 
-        const MyBookings = ({ bookings, onDelete, onEdit, pendingChanges, canSelfApprove, onRequestVacation }) => {
+        const MyBookings = ({ bookings, onDelete, onEdit, pendingChanges, canSelfApprove }) => {
             const pendingFor = (id) => pendingChanges.find((r) => r.bookingId === id && r.status === 'pending');
             return (
             <div className="p-4 sm:p-8 border-t border-gray-100 bg-gray-50/50">
@@ -1262,13 +1262,6 @@
                     <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-xl">
                         <Icon name="calendar-check" size={24} className="text-alorica-orange" /> My Bookings
                     </h3>
-                    <button
-                        type="button"
-                        onClick={onRequestVacation}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-alorica-orange text-white font-semibold text-sm hover:bg-opacity-90 transition-colors"
-                    >
-                        <Icon name="calendar-plus" size={16} /> Request Leave
-                    </button>
                 </div>
 
                 {bookings.length === 0 ? (
@@ -2727,7 +2720,7 @@
         };
 
         // Vacation display for employees
-        const MyVacations = ({ vacations, currentUser, vacationBalances, onCancel }) => {
+        const MyVacations = ({ vacations, currentUser, vacationBalances, onCancel, onRequestVacation }) => {
             const myVacations = vacations.filter(v => v.employeeId === currentUser.username);
             const balance = vacationBalances.find(b => b.employeeId === currentUser.username) 
                 || freshVacationBalance(currentUser.username);
@@ -2740,9 +2733,18 @@
 
             return (
                 <div className="p-4 sm:p-8 border-t border-gray-100 bg-gray-50/50">
-                    <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-xl mb-6">
-                        <Icon name="calendar" size={24} className="text-alorica-orange" /> My Leave
-                    </h3>
+                    <div className="flex items-center justify-between mb-6">
+                        <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-xl">
+                            <Icon name="calendar" size={24} className="text-alorica-orange" /> My Leave
+                        </h3>
+                        <button
+                            type="button"
+                            onClick={onRequestVacation}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-alorica-orange text-white font-semibold text-sm hover:bg-opacity-90 transition-colors"
+                        >
+                            <Icon name="calendar-plus" size={16} /> Request Leave
+                        </button>
+                    </div>
 
                     {/* Balance Cards */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
@@ -4752,7 +4754,7 @@
                                 dropOffIcon={dropOffIcon}
                                 timeLabel={timeLabel}
                             />
-                            <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} canSelfApprove={isTeamLead} onRequestVacation={() => setShowVacationForm(true)} />
+                            <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} canSelfApprove={isTeamLead} />
                             
                             {/* Vacation Section */}
                             <div className="border-t border-gray-100">
@@ -4770,6 +4772,7 @@
                                         currentUser={currentUser}
                                         vacationBalances={vacationBalances}
                                         onCancel={handleCancelVacation}
+                                        onRequestVacation={() => setShowVacationForm(true)}
                                     />
                                 )}
                             </div>
