@@ -1366,7 +1366,9 @@
             importing, setImporting, onExportBackup, onImportBackup,
             role, onSubmitToAdmin, pendingReviewCount,
             sheetStatus, sheet, onSendBack, onOverrideRequest,
-            pendingChangeCount
+            pendingChangeCount,
+            vacations, vacationBalances, customUsers,
+            onApproveVacation, onRejectVacation, onExportVacationExcel
         }) => {
             const isTeamLead = role === 'teamlead';
             const isAdmin = role === 'admin';
@@ -2302,8 +2304,8 @@
                             <VacationReview
                                 vacations={vacations}
                                 allUsers={[...DEFAULT_USERS, ...customUsers]}
-                                onApprove={handleApproveVacation}
-                                onReject={handleRejectVacation}
+                                onApprove={onApproveVacation}
+                                onReject={onRejectVacation}
                                 currentUser={currentUser}
                             />
                         </div>
@@ -2321,7 +2323,7 @@
                                 vacations={vacations}
                                 allUsers={[...DEFAULT_USERS, ...customUsers]}
                                 vacationBalances={vacationBalances}
-                                onExportExcel={handleExportVacationExcel}
+                                onExportExcel={onExportVacationExcel}
                             />
                         </div>
                     )}
@@ -3819,7 +3821,7 @@
                 pushToast('Leave request approved.', 'success');
 
                 // Notify employee
-                addNotification(
+                notify(
                     vacation.employeeId,
                     'Leave request approved',
                     `Your ${VACATION_TYPES[vacation.type]?.label || vacation.type} from ${vacation.startDate} to ${vacation.endDate} has been approved.`,
@@ -3845,7 +3847,7 @@
                 pushToast('Leave request rejected.', 'success');
 
                 // Notify employee
-                addNotification(
+                notify(
                     vacation.employeeId,
                     'Leave request declined',
                     `Your ${VACATION_TYPES[vacation.type]?.label || vacation.type} from ${vacation.startDate} to ${vacation.endDate} has been declined.`,
@@ -4728,6 +4730,12 @@
                             onSendBack={handleSendBackToLeader}
                             onOverrideRequest={setOverrideRequest}
                             pendingChangeCount={pendingChangeCount}
+                            vacations={vacations}
+                            vacationBalances={vacationBalances}
+                            customUsers={customUsers}
+                            onApproveVacation={handleApproveVacation}
+                            onRejectVacation={handleRejectVacation}
+                            onExportVacationExcel={handleExportVacationExcel}
                         />
                         ) : (
                         /* ================= REGULAR USER ================= */
