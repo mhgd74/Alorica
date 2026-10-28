@@ -15,16 +15,16 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 
-    <!-- Libraries are served locally so the system works on the company network / offline -->
+    <!-- Libraries are served locally so the system works on the company network / offline.
+         xlsx is deliberately absent: it is only needed to export a report, so it is
+         fetched by ensureXlsx() the first time one is requested instead of costing
+         every visitor 415 KB on a page where they may never export anything. -->
     <script src="vendor/tailwind.js"></script>
     <script src="vendor/react.production.min.js"></script>
     <script src="vendor/react-dom.production.min.js"></script>
     <script src="vendor/babel.min.js"></script>
     <script src="vendor/lucide.js"></script>
-    <script src="vendor/xlsx.bundle.js"></script>
 
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
     <script>
         tailwind.config = {
             theme: {
@@ -574,7 +574,34 @@
 
         /* =============================================================
          * 4. Excel report (one sheet per day + a summary sheet)
-         * ============================================================= */
+         * =============================================================
+         * The workbook library is ~415 KB and is only touched when a report
+         * is exported, so it is fetched the first time one of those actions
+         * runs rather than on every page load. The service worker keeps a
+         * copy, so exporting still works offline after the first use.
+         */
+
+        let xlsxPromise = null;
+
+        const ensureXlsx = () => {
+            if (window.XLSX) return Promise.resolve(window.XLSX);
+            if (!xlsxPromise) {
+                xlsxPromise = new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = 'vendor/xlsx.bundle.js';
+                    script.onload = () => {
+                        if (window.XLSX) resolve(window.XLSX);
+                        else reject(new Error('The Excel library did not initialise.'));
+                    };
+                    script.onerror = () => reject(new Error('Could not load the Excel library.'));
+                    document.head.appendChild(script);
+                });
+                // A failed load must not be remembered, or every later export
+                // would fail too instead of retrying.
+                xlsxPromise.catch(() => { xlsxPromise = null; });
+            }
+            return xlsxPromise;
+        };
 
         const THIN = { style: 'thin', color: { rgb: 'C9D6E2' } };
         const BORDER = { top: THIN, bottom: THIN, left: THIN, right: THIN };
@@ -3759,9 +3786,15 @@
 
             const buildFilteredWorkbook = () => buildWorkbook(filteredBookings, buses);
 
-            const handleSaveExcel = () => {
+            const handleSaveExcel = async () => {
                 if (!filteredBookings.length) {
                     pushToast('There are no bookings to export for the current filters.', 'error');
+                    return;
+                }
+                try {
+                    await ensureXlsx();
+                } catch (err) {
+                    pushToast(err.message, 'error');
                     return;
                 }
                 XLSX.writeFile(buildFilteredWorkbook(), exportFileName());
@@ -3771,6 +3804,12 @@
             const handleShare = async () => {
                 if (!filteredBookings.length) {
                     pushToast('There are no bookings to share for the current filters.', 'error');
+                    return;
+                }
+                try {
+                    await ensureXlsx();
+                } catch (err) {
+                    pushToast(err.message, 'error');
                     return;
                 }
                 const wb = buildFilteredWorkbook();
@@ -4010,7 +4049,13 @@
                 );
             };
 
-            const handleExportVacationExcel = () => {
+            const handleExportVacationExcel = async () => {
+                try {
+                    await ensureXlsx();
+                } catch (err) {
+                    pushToast(err.message, 'error');
+                    return;
+                }
                 const wb = XLSX.utils.book_new();
                 const wsData = [
                     ['Employee Name', 'Employee ID', 'Type', 'Start Date', 'End Date', 'Days', 'Status', 'Requested At', 'Decided At', 'Decided By', 'Reason', 'Comments']
