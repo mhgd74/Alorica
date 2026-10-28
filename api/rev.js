@@ -1,4 +1,5 @@
 const { getRev } = require('../lib/supabase');
+const { requireAuth } = require('../lib/guard');
 const { setCorsHeaders } = require('../lib/cors');
 
 module.exports = async (req, res) => {
@@ -14,10 +15,10 @@ module.exports = async (req, res) => {
     return;
   }
 
+  if (!requireAuth(req, res)) return;
+
   try {
-    console.log('Attempting to fetch revision...');
     const rev = await getRev();
-    console.log('Revision fetched:', rev);
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({ rev });
   } catch (err) {

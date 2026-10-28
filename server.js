@@ -3,6 +3,15 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
+const {
+  issueToken,
+  verifyPassword,
+  sanitizeUser,
+  sanitizeUsers,
+  claimsFromRequest,
+  authorizeOps,
+  resolveAccount,
+} = require('./lib/auth');
 
 // HTTPS is the primary entry point on 3000; plain HTTP listens on 3080.
 const PORT = 3080;
@@ -79,13 +88,53 @@ const readState = () => {
   for (const name of COLLECTIONS) {
     collections[name] = selectStmt.all(name).map((row) => JSON.parse(row.data));
   }
+  // Password material never leaves the server; login compares it here.
+  collections.users = sanitizeUsers(collections.users);
   return { rev: getRev(), collections };
 };
 
-const applyOps = (ops) => {
+/** The login endpoint is the only place that may see the stored hashes. */
+const readAccounts = () => ({
+  users: selectStmt.all('users').map((row) => JSON.parse(row.data)),
+  removedUsers: selectStmt.all('removedUsers').map((row) => JSON.parse(row.data)),
+});
+
+/**
+ * The browser no longer holds password hashes, so a record it sends back can
+ * legitimately be missing them. Copying the stored values over stops a name or
+ * role change from silently wiping somebody's password.
+ */
+const preserveUserSecrets = (ops) => {
+  const touchesUsers = (ops || []).some(
+    (op) => op && op.collection === 'users' && (op.upsert || []).length
+  );
+  if (!touchesUsers) return ops;
+
+  const stored = new Map(
+    selectStmt.all('users').map((row) => {
+      const value = JSON.parse(row.data);
+      return [itemId(value), value];
+    })
+  );
+
+  return ops.map((op) => {
+    if (!op || op.collection !== 'users' || !(op.upsert || []).length) return op;
+    return {
+      ...op,
+      upsert: op.upsert.map((item) => {
+        const previous = stored.get(itemId(item));
+        if (!previous || item.passwordHash) return item;
+        return { ...item, passwordHash: previous.passwordHash, passwordSalt: previous.passwordSalt };
+      }),
+    };
+  });
+};
+
+const applyOps = (ops, seed = false) => {
+  const prepared = seed ? ops : preserveUserSecrets(ops);
   db.exec('BEGIN');
   try {
-    for (const op of ops || []) {
+    for (const op of prepared || []) {
       const name = op && op.collection;
       if (!COLLECTIONS.includes(name)) continue;
       // `replace` rewrites a whole collection (used for the first seed).
@@ -153,26 +202,98 @@ const readBody = (req) =>
     req.on('error', reject);
   });
 
-// `GET /api/state` returns every collection, `GET /api/rev` only the revision.
+// Every route below mirrors the Vercel functions: a signed token is required
+// for anything that reads or writes shared state, and the write policy decides
+// which collections a role may touch.
 const handleApi = async (req, res, urlPath) => {
+  const readJsonBody = async () => {
+    try {
+      return await readBody(req);
+    } catch (err) {
+      sendJSON(res, 400, { error: err.message });
+      return null;
+    }
+  };
+
+  if (req.method === 'POST' && urlPath === '/api/login') {
+    const body = await readJsonBody();
+    if (!body) return true;
+
+    const username = typeof body.username === 'string' ? body.username.trim() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+    if (!username || !password) {
+      sendJSON(res, 400, { error: 'Username and password are required' });
+      return true;
+    }
+
+    const { users, removedUsers } = readAccounts();
+    const account = resolveAccount(username, users, removedUsers);
+
+    // Same answer for "no such account" and "wrong password".
+    if (!account || !verifyPassword(password, account)) {
+      sendJSON(res, 401, { error: 'Invalid username or password' });
+      return true;
+    }
+
+    if (
+      account.mustChangePassword &&
+      account.tempPasswordExpiresAt &&
+      account.tempPasswordExpiresAt < Date.now()
+    ) {
+      sendJSON(res, 403, { error: 'This temporary password has expired. Please request a new one.' });
+      return true;
+    }
+
+    const role = account.role || (account.username === 'admin' ? 'admin' : 'user');
+    sendJSON(res, 200, {
+      token: issueToken({ username: account.username, role }, Boolean(body.remember)),
+      user: sanitizeUser(account),
+      // Tells the browser this account still stores a plain password and
+      // should be re-saved as a hash now that the password is known.
+      legacy: !account.passwordHash && typeof account.password === 'string',
+    });
+    return true;
+  }
+
+  const claims = claimsFromRequest(req);
+
+  const deny = () => {
+    sendJSON(res, 401, { error: 'Authentication required' });
+    return true;
+  };
+
+  if (req.method === 'GET' && urlPath === '/api/session') {
+    if (!claims) return deny();
+    const { users, removedUsers } = readAccounts();
+    const account = resolveAccount(claims.username, users, removedUsers);
+    if (!account) {
+      sendJSON(res, 401, { error: 'This account no longer exists' });
+      return true;
+    }
+    sendJSON(res, 200, { user: sanitizeUser(account) });
+    return true;
+  }
+
   if (req.method === 'GET' && urlPath === '/api/state') {
+    if (!claims) return deny();
     sendJSON(res, 200, readState());
     return true;
   }
 
   if (req.method === 'GET' && urlPath === '/api/rev') {
+    if (!claims) return deny();
     sendJSON(res, 200, { rev: getRev() });
     return true;
   }
 
   if (req.method === 'POST' && urlPath === '/api/seed') {
-    let body;
-    try {
-      body = await readBody(req);
-    } catch (err) {
-      sendJSON(res, 400, { error: err.message });
-      return true;
-    }
+    const body = await readJsonBody();
+    if (!body) return true;
+
+    // An empty database holds no accounts, so there is nothing to
+    // authenticate against — the very first seed is the one exception.
+    if (getRev() !== 0 && !claims) return deny();
+
     // Only the very first client may hand over its local data. The check
     // and the write happen without an await in between, so two devices
     // starting at once cannot both win.
@@ -181,7 +302,7 @@ const handleApi = async (req, res, urlPath) => {
       return true;
     }
     try {
-      sendJSON(res, 200, { rev: applyOps(body.ops), seeded: true });
+      sendJSON(res, 200, { rev: applyOps(body.ops, true), seeded: true });
     } catch (err) {
       sendJSON(res, 500, { error: err.message });
     }
@@ -189,16 +310,19 @@ const handleApi = async (req, res, urlPath) => {
   }
 
   if (req.method === 'POST' && urlPath === '/api/ops') {
-    let body;
-    try {
-      body = await readBody(req);
-    } catch (err) {
-      sendJSON(res, 400, { error: err.message });
+    if (!claims) return deny();
+
+    const body = await readJsonBody();
+    if (!body) return true;
+
+    const verdict = authorizeOps(claims, body.ops);
+    if (!verdict.ok) {
+      sendJSON(res, verdict.status, { error: verdict.error });
       return true;
     }
+
     try {
-      const rev = applyOps(body.ops);
-      sendJSON(res, 200, { rev });
+      sendJSON(res, 200, { rev: applyOps(body.ops) });
     } catch (err) {
       sendJSON(res, 500, { error: err.message });
     }

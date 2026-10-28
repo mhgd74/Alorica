@@ -51,14 +51,15 @@
          * 1. Configuration
          * ============================================================= */
 
-        // Built-in accounts. Kept out of the UI on purpose, and stored as salted PBKDF2-SHA256
-        // hashes so no password is readable in the source or in localStorage.
+        // Built-in accounts. Kept out of the UI on purpose and deliberately
+        // free of password material — the server owns the hashes now, so the
+        // browser only ever needs the name and the role.
         // role: 'admin' (full access) | 'teamlead' (review + edit bookings only) | 'user'
         const DEFAULT_USERS = [
-            { username: 'admin', name: 'System Admin', role: 'admin', passwordSalt: '8b036795d80f3e91a28d9a4e6df054c3', passwordHash: '7ba9a15205e600a95954ffd082fa77274aa2a6a979e5a0e63e6ca5c8a24c938b' },
-            { username: 'teamlead', name: 'Team Leader', role: 'teamlead', passwordSalt: 'c58051277c5d9074dfeff9746c355e60', passwordHash: '11ed52253410cf6bc2745869aee4d29c7b80454f9ec6a9fcb3d7b67f98a9f5d8' },
-            { username: '7406173', name: 'Gomaa Abdelrahman', role: 'user', passwordSalt: 'ace138aead5305352f5eaf89f13950c3', passwordHash: '92d22c3baba14718acbef23e5f10da00a659ea3fcc554131492f9a68881f8c3a', mustChangePassword: true },
-            { username: 'user2', name: 'Second User', role: 'user', passwordSalt: '41871c8d1e71b76f725da87a84f60e68', passwordHash: '55e1cb505c126417fc177d3a1b1298621f66f2aa994db335e7f3574983ae7861' }
+            { username: 'admin', name: 'System Admin', role: 'admin' },
+            { username: 'teamlead', name: 'Team Leader', role: 'teamlead' },
+            { username: '7406173', name: 'Gomaa Abdelrahman', role: 'user', mustChangePassword: true },
+            { username: 'user2', name: 'Second User', role: 'user' }
         ];
 
         // Fixed pickup routes / points mapping from the provided schedule.
@@ -200,6 +201,66 @@
             }
         };
 
+        /* =============================================================
+         * 2a-2. Session token
+         * =============================================================
+         * The password is checked by the server, which hands back a signed
+         * token. Every API call carries it, and a 401 means the session is
+         * over — so the checks can no longer be skipped from the browser.
+         */
+
+        const SESSION_KEY = 'alorica.session';
+
+        const AUTH = { token: null, onExpired: null };
+
+        const authRead = () => {
+            try {
+                const saved = JSON.parse(localStorage.getItem(SESSION_KEY));
+                return saved && saved.token ? saved : null;
+            } catch (e) {
+                return null;
+            }
+        };
+
+        // Only "remember me" keeps the token across a reload; otherwise it
+        // lives in memory for the tab alone.
+        const authRemember = (token, user) => {
+            try {
+                localStorage.setItem(SESSION_KEY, JSON.stringify({ token, user }));
+            } catch (e) {
+                /* storage unavailable */
+            }
+        };
+
+        const authForget = () => {
+            try {
+                localStorage.removeItem(SESSION_KEY);
+            } catch (e) {
+                /* storage unavailable */
+            }
+        };
+
+        const authClear = () => {
+            AUTH.token = null;
+            authForget();
+        };
+
+        // One place to attach the token and to react to an expired session.
+        const apiFetch = async (path, options = {}) => {
+            const headers = { ...(options.headers || {}) };
+            if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+            if (AUTH.token) headers.Authorization = `Bearer ${AUTH.token}`;
+
+            const res = await fetch(path, { ...options, headers });
+
+            if (res.status === 401) {
+                authClear();
+                if (AUTH.onExpired) AUTH.onExpired();
+                throw new Error('Session expired');
+            }
+            return res;
+        };
+
         const syncSetOnline = (online) => {
             if (SYNC.online === online) return;
             SYNC.online = online;
@@ -259,9 +320,8 @@
         };
 
         const syncPost = async (ops) => {
-            const res = await fetch('/api/ops', {
+            const res = await apiFetch('/api/ops', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ops })
             });
             if (!res.ok) throw new Error(`sync failed (${res.status})`);
@@ -277,9 +337,17 @@
                 SYNC.rev = rev;
                 syncSetOnline(true);
             } catch (err) {
-                // Nothing is lost — the batch goes back in the queue.
-                ops.forEach((op) => syncRequeue(STORAGE[op.collection], { upsert: op.upsert, remove: op.remove }));
-                SYNC.pending = new Map([...SYNC.pending].filter(([, q]) => q.upsert.size || q.remove.size));
+                // A 4xx means the server will never accept this batch — a role
+                // that may not touch a collection, for instance. Retrying would
+                // only wedge the queue, so the batch is dropped and reported.
+                // Anything else (offline, 5xx) is transient: the batch goes
+                // back in and is retried.
+                if (/\((4\d\d)\)/.test(err.message)) {
+                    console.warn('Sync batch rejected by the server:', err.message, ops);
+                } else {
+                    ops.forEach((op) => syncRequeue(STORAGE[op.collection], { upsert: op.upsert, remove: op.remove }));
+                    SYNC.pending = new Map([...SYNC.pending].filter(([, q]) => q.upsert.size || q.remove.size));
+                }
                 syncSetOnline(false);
             } finally {
                 SYNC.flushing = false;
@@ -288,10 +356,13 @@
 
         // Used when the server is the one that changed: the cache is updated
         // first so the save effects below see no difference and stay quiet.
+        // A collection with work still queued locally is skipped, otherwise
+        // the server copy would wipe an edit that has not been accepted yet.
         const syncApplyRemote = (collections) => {
             const touched = {};
             Object.keys(STORAGE).forEach((name) => {
                 if (!(name in collections)) return;
+                if (SYNC.pending.has(STORAGE[name])) return;
                 const value = collections[name] || [];
                 SYNC.cache[STORAGE[name]] = value;
                 try {
@@ -310,6 +381,15 @@
             } catch (e) {
                 /* storage full or unavailable */
             }
+
+            // The first value seen after a reload is what was just read from
+            // localStorage, so it is not a change to send. Without this, every
+            // page load would push the whole local dataset back at the server.
+            if (!(key in SYNC.cache)) {
+                SYNC.cache[key] = value;
+                return;
+            }
+
             const diff = syncDiff(SYNC.cache[key], value);
             SYNC.cache[key] = value;
             if (diff.upsert.length || diff.remove.length) {
@@ -369,13 +449,6 @@
         };
 
         const isHashed = (user) => Boolean(user && user.passwordHash && user.passwordSalt);
-
-        const verifyPassword = async (password, user) => {
-            if (!user) return false;
-            if (!isHashed(user)) return user.password === password;
-            const hash = await derivePasswordHash(password, user.passwordSalt);
-            return Boolean(hash) && hash === user.passwordHash;
-        };
 
         // Replaces a plain-text password with a salted hash (never keeps both).
         const withHashedPassword = async (user) => {
@@ -3053,9 +3126,11 @@
             /* ------------------ server sync ------------------
              * Every device polls the revision counter; when it moves the
              * collections are re-read, so a change made anywhere shows up
-             * here within a few seconds.
+             * here within a few seconds. Syncing only starts once there is a
+             * session, because the server refuses to talk to anybody else.
              */
             useEffect(() => {
+                if (!isLoggedIn) return undefined;
                 let cancelled = false;
 
                 const listener = (online) => setSyncOnline(online);
@@ -3083,7 +3158,7 @@
                 // existed is lost.
                 const bootstrap = async () => {
                     try {
-                        const state = await (await fetch('/api/state', { cache: 'no-store' })).json();
+                        const state = await (await apiFetch('/api/state', { cache: 'no-store' })).json();
                         if (state.rev !== 0) {
                             SYNC.rev = state.rev;
                             return state.collections;
@@ -3094,14 +3169,13 @@
                             replace: true,
                             upsert: loadJSON(STORAGE[name], [])
                         }));
-                        const res = await fetch('/api/seed', {
+                        const res = await apiFetch('/api/seed', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ ops })
                         });
                         if (res.status === 409) {
                             // Another device seeded first — take its data instead.
-                            const fresh = await (await fetch('/api/state', { cache: 'no-store' })).json();
+                            const fresh = await (await apiFetch('/api/state', { cache: 'no-store' })).json();
                             SYNC.rev = fresh.rev;
                             return fresh.collections;
                         }
@@ -3117,12 +3191,12 @@
 
                 const pull = async () => {
                     try {
-                        const { rev } = await (await fetch('/api/rev', { cache: 'no-store' })).json();
+                        const { rev } = await (await apiFetch('/api/rev', { cache: 'no-store' })).json();
                         // A batch can fail without the revision moving, so push any
                         // leftover work before deciding whether anything new arrived.
                         if (SYNC.pending.size > 0) await syncFlush();
                         if (rev !== SYNC.rev) {
-                            const state = await (await fetch('/api/state', { cache: 'no-store' })).json();
+                            const state = await (await apiFetch('/api/state', { cache: 'no-store' })).json();
                             SYNC.rev = state.rev;
                             applyServerState(state.collections);
                         }
@@ -3156,33 +3230,53 @@
                     window.removeEventListener('focus', onWake);
                     SYNC.listeners.delete(listener);
                 };
+            }, [isLoggedIn]);
+
+            /* ------------------ session expiry ------------------
+             * Any 401 signs the device out, so a token that lapsed or an
+             * account that was deleted lands back on the login screen.
+             */
+            useEffect(() => {
+                AUTH.onExpired = () => {
+                    setIsLoggedIn(false);
+                    setCurrentUser(null);
+                    // Work queued under the lapsed session must not be pushed
+                    // by whoever signs in next.
+                    SYNC.pending.clear();
+                };
+                return () => { AUTH.onExpired = null; };
             }, []);
 
-            /* ------------------ auto-login from saved session ------------------ */
+            /* ------------------ auto-login from the saved token ------------------ */
             useEffect(() => {
-                const session = localStorage.getItem('session');
-                if (session) {
-                    try {
-                        const { username, expiresAt } = JSON.parse(session);
-                        if (expiresAt > Date.now()) {
-                            // Session is still valid, auto-login
-                            const match = allUsers.find((u) => u.username === username);
-                            if (match) {
-                                setCurrentUser(match);
-                                setIsLoggedIn(true);
-                            }
-                        } else {
-                            // Session expired, clear it
-                            localStorage.removeItem('session');
-                            localStorage.removeItem('rememberMe');
-                            setRememberMe(false);
-                        }
-                    } catch (err) {
-                        // Invalid session data, clear it
-                        localStorage.removeItem('session');
-                    }
+                const saved = authRead();
+                if (!saved) {
+                    // Drop the session format used before tokens existed.
+                    localStorage.removeItem('session');
+                    return;
                 }
-            }, [allUsers]);
+
+                // Show the cached account straight away, then confirm with the
+                // server so a lapsed token or a removed account signs out.
+                AUTH.token = saved.token;
+                if (saved.user) {
+                    setCurrentUser(saved.user);
+                    setIsLoggedIn(true);
+                }
+
+                apiFetch('/api/session')
+                    .then((res) => (res.ok ? res.json() : null))
+                    .then((payload) => {
+                        if (!payload) return;
+                        setCurrentUser(payload.user);
+                        setIsLoggedIn(true);
+                        authRemember(saved.token, payload.user);
+                    })
+                    .catch(() => {
+                        // Offline: keep the cached session and let the sync
+                        // loop retry. A rejected token signs out above.
+                    });
+            }, []);
 
             /* ------------------ online/offline detection ------------------ */
             useEffect(() => {
@@ -3336,49 +3430,50 @@
             const handleLogin = async (e) => {
                 e.preventDefault();
 
-                // PBKDF2 needs the WebCrypto API, which browsers only expose over
-                // https:// or http://localhost.
-                if (!window.crypto || !crypto.subtle) {
-                    setError('Sign-in requires a secure connection — open the app on https:// or http://localhost.');
-                    return;
-                }
-
                 const username = loginData.username.trim();
-                const match = allUsers.find((u) => u.username === username);
-                const ok = match ? await verifyPassword(loginData.password, match) : false;
+                const password = loginData.password;
 
-                if (!ok) {
+                if (!username || !password) {
+                    setError('Please enter your username and password.');
+                    return;
+                }
+
+                let payload;
+                try {
+                    const res = await fetch('/api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, password, remember: rememberMe })
+                    });
+                    payload = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                        setLoginNotice('');
+                        setError(payload.error || 'Invalid username or password');
+                        return;
+                    }
+                } catch (err) {
                     setLoginNotice('');
-                    setError('Invalid username or password');
+                    setError('Cannot reach the server. Check your connection and try again.');
                     return;
                 }
 
-                let user = match;
-                // First sign-in of an account still stored with a plain-text password:
-                // replace it with a salted hash in place.
-                if (!isHashed(user)) {
-                    user = await withHashedPassword(user);
-                    setCustomUsers((prev) => prev.map((u) => (u.username === user.username ? user : u)));
-                }
+                let user = payload.user;
+                AUTH.token = payload.token;
 
-                // A temporary password that was never replaced in time is no longer valid.
-                if (user.mustChangePassword && user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < Date.now()) {
-                    setError('This temporary password has expired. Please request a new one.');
-                    return;
-                }
-
-                // Save remember me preference
+                // "Remember me" is what makes the session outlive the tab.
                 localStorage.setItem('rememberMe', rememberMe.toString());
+                if (rememberMe) authRemember(payload.token, user);
+                else authForget();
 
-                // Save session with expiration if remember me is checked
-                if (rememberMe) {
-                    const expiresAt = Date.now() + (30 * 24 * 60 * 60 * 1000); // 30 days
-                    localStorage.setItem('session', JSON.stringify({
-                        username: user.username,
-                        expiresAt: expiresAt
-                    }));
-                } else {
-                    localStorage.removeItem('session');
+                // An account still stored with a plain-text password is turned
+                // into a salted hash the first time its owner signs in.
+                if (payload.legacy) {
+                    const upgraded = await withHashedPassword({ ...user, password });
+                    if (isHashed(upgraded)) {
+                        user = upgraded;
+                        setCustomUsers((prev) => [...prev.filter((u) => u.username !== user.username), user]);
+                        setRemovedUsers((prev) => prev.filter((u) => u !== user.username));
+                    }
                 }
 
                 setIsLoggedIn(true);
@@ -3535,8 +3630,11 @@
                 setPwdForm({ next: '', confirm: '' });
                 setPwdFeedback({ type: '', text: '' });
                 setLoginNotice('');
-                // Clear session on sign out
-                localStorage.removeItem('session');
+                // Drop the token so the next visit has to sign in again, and
+                // throw away work this session never managed to send — it
+                // belongs to the account that is leaving.
+                authClear();
+                SYNC.pending.clear();
                 localStorage.removeItem('rememberMe');
                 setRememberMe(false);
             };

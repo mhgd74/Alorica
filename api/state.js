@@ -1,4 +1,5 @@
-const { readState, getRev } = require('../lib/supabase');
+const { readState } = require('../lib/supabase');
+const { requireAuth } = require('../lib/guard');
 const { setCorsHeaders } = require('../lib/cors');
 
 module.exports = async (req, res) => {
@@ -13,6 +14,8 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  if (!requireAuth(req, res)) return;
 
   try {
     const state = await readState();

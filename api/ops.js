@@ -1,4 +1,5 @@
 const { applyOps } = require('../lib/supabase');
+const { requireWrite } = require('../lib/guard');
 const { setCorsHeaders } = require('../lib/cors');
 
 module.exports = async (req, res) => {
@@ -14,8 +15,11 @@ module.exports = async (req, res) => {
     return;
   }
 
+  const ops = (req.body || {}).ops;
+  if (!requireWrite(req, res, ops)) return;
+
   try {
-    const result = await applyOps(req.body.ops, false);
+    const result = await applyOps(ops, false);
     res.status(200).json(result);
   } catch (err) {
     console.error(err);
