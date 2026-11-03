@@ -6,9 +6,12 @@
   "scripts": {
     "start": "node server.js",
     "dev": "vercel dev",
-    "format": "prettier --write \"**/*.{js,json,md}\"",
-    "format:check": "prettier --check \"**/*.{js,json,md}\"",
-    "generate-icons": "node generate-icons.js"
+    "build": "node scripts/build.js",
+    "build:check": "node scripts/build.js --check",
+    "format": "prettier --write \"**/*.{js,jsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,jsx,json,md}\"",
+    "generate-icons": "node generate-icons.js",
+    "prepare": "node scripts/install-hooks.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

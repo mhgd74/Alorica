@@ -8,3 +8,9 @@ dist
 
 # Internal documents — must not be published with the site
 docs
+
+# Build tooling and database migrations. Neither is needed to serve the site,
+# and the rewrite in vercel.json only sends unmatched paths to index.html, so a
+# real file here would be downloadable by anyone who guessed its name.
+scripts
+supabase

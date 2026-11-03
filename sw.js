@@ -1,5 +1,5 @@
 /* Alorica Booking System — offline cache */
-const CACHE = 'alorica-v3';
+const CACHE = 'alorica-v4';
 
 const ASSETS = [
   './',
@@ -18,9 +18,34 @@ const ASSETS = [
   './vendor/tailwind.js',
   './vendor/react.production.min.js',
   './vendor/react-dom.production.min.js',
-  './vendor/babel.min.js',
   './vendor/lucide.js',
   './vendor/xlsx.bundle.js',
+
+  // The application modules. index.html used to carry the whole app as inline
+  // Babel-compiled JSX; it is now split into these files, so they have to be
+  // precached or the app would not start offline. Babel itself is gone: it is a
+  // build-time tool now, not a 2.8 MB download for every visitor.
+  './src/main.js',
+  './src/App.js',
+  './src/lib/config.js',
+  './src/lib/roles.js',
+  './src/lib/session.js',
+  './src/lib/store.js',
+  './src/lib/crypto.js',
+  './src/lib/preferences.js',
+  './src/lib/settings.js',
+  './src/lib/vacation.js',
+  './src/lib/format.js',
+  './src/lib/booking.js',
+  './src/lib/report.js',
+  './src/components/common.js',
+  './src/components/dialogs.js',
+  './src/components/auth.js',
+  './src/components/booking.js',
+  './src/components/vacation.js',
+  './src/components/notifications.js',
+  './src/components/settings.js',
+  './src/components/admin.js',
 ];
 
 self.addEventListener('install', (event) => {
