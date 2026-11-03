@@ -306,9 +306,11 @@
         };
 
         // Added / changed / removed items between two versions of a collection.
+        // Anything that is not a list is treated as empty: a value left behind
+        // by an older version in localStorage must not take the page down.
         const syncDiff = (before, after) => {
-            const prevMap = new Map((before || []).map((item) => [syncKeyOf(item), item]));
-            const nextMap = new Map((after || []).map((item) => [syncKeyOf(item), item]));
+            const prevMap = new Map((Array.isArray(before) ? before : []).map((item) => [syncKeyOf(item), item]));
+            const nextMap = new Map((Array.isArray(after) ? after : []).map((item) => [syncKeyOf(item), item]));
             const upsert = [];
             const remove = [];
             nextMap.forEach((value, id) => {
@@ -419,6 +421,11 @@
             } catch (e) {
                 /* storage full or unavailable */
             }
+
+            // Keys outside the synced collections (the device-local
+            // preferences, for instance) are stored and nothing more — there
+            // is nothing to send, and a plain object would not diff.
+            if (!(key in COLLECTION_BY_KEY)) return;
 
             // The first value seen after a reload is what was just read from
             // localStorage, so it is not a change to send. Without this, every
