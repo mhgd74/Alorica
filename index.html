@@ -141,8 +141,15 @@
         // channel as everything else.
         const freshSheet = () => [{ id: 'sheet', status: 'draft', updatedAt: null, updatedBy: '' }];
 
-        // Fresh vacation balances for a new employee
+        // Fresh vacation balances for a new employee.
+        //
+        // The `id` is what the sync layer keys a collection item on. A balance
+        // record used to carry none, which meant the server could not derive a
+        // key for it (apply_sync_ops skips an item whose id is null) and every
+        // employee's balance collapsed onto one another in the diff, so an
+        // approved leave never reached the shared state.
         const freshVacationBalance = (employeeId) => ({
+            id: String(employeeId),
             employeeId,
             annual: 21,
             sick: 14,
@@ -151,6 +158,13 @@
             usedSick: 0,
             usedPersonal: 0
         });
+
+        // Balances saved before they carried an id are given one as they are
+        // read, so an older local dataset keeps syncing instead of piling up
+        // under a single shared key.
+        const normalizeVacationBalances = (list) => (Array.isArray(list) ? list : [])
+            .filter(Boolean)
+            .map((b) => (b.id == null ? { ...b, id: String(b.employeeId) } : b));
 
         const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -3111,7 +3125,9 @@
             const [syncOnline, setSyncOnline] = useState(SYNC.online);
             const [adminView, setAdminView] = useState('bookings');
             const [vacations, setVacations] = useState(() => loadJSON(STORAGE.vacations, []));
-            const [vacationBalances, setVacationBalances] = useState(() => loadJSON(STORAGE.vacationBalances, []));
+            const [vacationBalances, setVacationBalances] = useState(
+                () => normalizeVacationBalances(loadJSON(STORAGE.vacationBalances, []))
+            );
             const [showVacationForm, setShowVacationForm] = useState(false);
             // A team leader is an employee too, so they can flip between running the
             // dashboard and managing their own bookings.
@@ -3980,19 +3996,22 @@
                 );
                 setVacations(updatedVacations);
 
-                // Update balance
-                const updatedBalances = [...vacationBalances];
-                let balance = updatedBalances.find(b => b.employeeId === vacation.employeeId);
-                if (!balance) {
-                    balance = freshVacationBalance(vacation.employeeId);
-                    updatedBalances.push(balance);
-                }
+                // Update balance. The record is replaced rather than mutated in
+                // place: the sync layer diffs the new collection against the copy
+                // it holds, and an object changed in place looks identical to it,
+                // so the deduction would never be queued for the server.
+                const existingBalance = vacationBalances.find(b => b.employeeId === vacation.employeeId);
+                const balance = existingBalance
+                    ? { ...existingBalance }
+                    : freshVacationBalance(vacation.employeeId);
 
                 if (vacation.type === 'annual') balance.usedAnnual += vacation.days;
                 else if (vacation.type === 'sick') balance.usedSick += vacation.days;
                 else if (vacation.type === 'personal') balance.usedPersonal += vacation.days;
 
-                setVacationBalances(updatedBalances);
+                setVacationBalances(existingBalance
+                    ? vacationBalances.map(b => (b.employeeId === vacation.employeeId ? balance : b))
+                    : [...vacationBalances, balance]);
 
                 // The employee is away on those dates, so their own bookings inside the
                 // range cannot stand any more — the seats go back to the pool.
