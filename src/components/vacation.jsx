@@ -67,7 +67,7 @@ export const VacationRequestForm = ({ currentUser, vacationBalances, onSubmit, o
     };
 
     return (
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <div className="p-4 sm:p-8">
             <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-xl mb-6">
                 <Icon name="calendar-plus" size={24} className="text-alorica-orange" /> Request Leave
             </h3>
@@ -158,7 +158,7 @@ export const MyVacations = ({ vacations, currentUser, vacationBalances, onCancel
     };
 
     return (
-        <div className="p-4 sm:p-8 border-t border-gray-100 bg-gray-50/50">
+        <div className="p-4 sm:p-8">
             <div className="flex items-center justify-between mb-6">
                 <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-xl">
                     <Icon name="calendar" size={24} className="text-alorica-orange" /> My Leave

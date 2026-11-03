@@ -67,7 +67,7 @@ export var VacationRequestForm = _ref => {
     }));
   };
   return /*#__PURE__*/React.createElement("div", {
-    className: "bg-white rounded-2xl p-6 shadow-sm border border-gray-100"
+    className: "p-4 sm:p-8"
   }, /*#__PURE__*/React.createElement("h3", {
     className: "flex items-center gap-2 text-alorica-blue font-bold text-xl mb-6"
   }, /*#__PURE__*/React.createElement(Icon, {
@@ -154,7 +154,7 @@ export var MyVacations = _ref3 => {
     personal: balance.personal - balance.usedPersonal
   };
   return /*#__PURE__*/React.createElement("div", {
-    className: "p-4 sm:p-8 border-t border-gray-100 bg-gray-50/50"
+    className: "p-4 sm:p-8"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between mb-6"
   }, /*#__PURE__*/React.createElement("h3", {

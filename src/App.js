@@ -76,6 +76,9 @@ export var App = () => {
   // A team leader is an employee too, so they can flip between running the
   // dashboard and managing their own bookings.
   var [leaderMode, setLeaderMode] = useState('dashboard');
+  // The employee side is two screens, not one long page: booking transport and
+  // managing your own leave.
+  var [meView, setMeView] = useState('transport');
   var [newUser, setNewUser] = useState({
     name: '',
     username: '',
@@ -1922,12 +1925,32 @@ export var App = () => {
   }), /*#__PURE__*/React.createElement("div", {
     className: "min-h-screen bg-alorica-light"
   }, /*#__PURE__*/React.createElement("nav", {
-    className: "bg-white shadow-md px-3 sm:px-6 py-3 sm:py-4 flex justify-between items-center sticky top-0 z-50"
+    className: "bg-white shadow-md px-3 sm:px-6 py-3 sm:py-4 flex flex-wrap justify-between items-center gap-y-3 sticky top-0 z-50"
   }, /*#__PURE__*/React.createElement("img", {
     src: "logo.png",
     alt: "Alorica",
     className: "h-7 sm:h-8"
-  }), /*#__PURE__*/React.createElement("div", {
+  }), !showDashboard && /*#__PURE__*/React.createElement("div", {
+    className: "order-last sm:order-none w-full sm:w-auto flex items-center bg-gray-100 rounded-full p-0.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setMeView('transport'),
+    className: "flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ".concat(meView === 'transport' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue')
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "bus",
+    size: 14
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "hidden sm:inline"
+  }, "Transportation"), /*#__PURE__*/React.createElement("span", {
+    className: "sm:hidden"
+  }, "Transport")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setMeView('leave'),
+    className: "flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ".concat(meView === 'leave' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue')
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "calendar",
+    size: 14
+  }), "My Leave")), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2 sm:gap-4"
   }, isTeamLead && /*#__PURE__*/React.createElement("div", {
     className: "hidden sm:flex items-center bg-gray-100 rounded-full p-0.5"
@@ -2107,10 +2130,8 @@ export var App = () => {
     onApproveVacation: handleApproveVacation,
     onRejectVacation: handleRejectVacation,
     onExportVacationExcel: handleExportVacationExcel
-  }) :
-  /*#__PURE__*/
-  /* ================= REGULAR USER ================= */
-  React.createElement("div", {
+  }) : (/* ================= REGULAR USER ================= */
+  meView === 'transport' ? /*#__PURE__*/React.createElement("div", {
     className: "bg-white rounded-3xl shadow-2xl overflow-hidden border border-white"
   }, /*#__PURE__*/React.createElement(BookingForm, {
     activeTab: activeTab,
@@ -2129,8 +2150,8 @@ export var App = () => {
     onEdit: openEditBooking,
     pendingChanges: changeRequests,
     canSelfApprove: isTeamLead
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "border-t border-gray-100"
+  })) : /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-3xl shadow-2xl overflow-hidden border border-white"
   }, showVacationForm ? /*#__PURE__*/React.createElement(VacationRequestForm, {
     currentUser: currentUser,
     vacationBalances: vacationBalances,

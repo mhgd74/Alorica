@@ -70,6 +70,9 @@ export const App = () => {
     // A team leader is an employee too, so they can flip between running the
     // dashboard and managing their own bookings.
     const [leaderMode, setLeaderMode] = useState('dashboard');
+    // The employee side is two screens, not one long page: booking transport and
+    // managing your own leave.
+    const [meView, setMeView] = useState('transport');
     const [newUser, setNewUser] = useState({ name: '', username: '', password: '', role: 'user' });
     const [newBus, setNewBus] = useState({ name: '', capacity: '' });
     const [userFeedback, setUserFeedback] = useState({ type: '', text: '' });
@@ -1902,8 +1905,32 @@ export const App = () => {
             />
         )}
         <div className="min-h-screen bg-alorica-light">
-            <nav className="bg-white shadow-md px-3 sm:px-6 py-3 sm:py-4 flex justify-between items-center sticky top-0 z-50">
+            <nav className="bg-white shadow-md px-3 sm:px-6 py-3 sm:py-4 flex flex-wrap justify-between items-center gap-y-3 sticky top-0 z-50">
                 <img src="logo.png" alt="Alorica" className="h-7 sm:h-8" />
+                {/* Transportation and My Leave are separate screens; on a narrow
+                    screen the switcher drops to its own full-width row. It is
+                    pointless while the dashboard is up, so it hides there. */}
+                {!showDashboard && (
+                    <div className="order-last sm:order-none w-full sm:w-auto flex items-center bg-gray-100 rounded-full p-0.5">
+                        <button
+                            type="button"
+                            onClick={() => setMeView('transport')}
+                            className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${meView === 'transport' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
+                        >
+                            <Icon name="bus" size={14} />
+                            <span className="hidden sm:inline">Transportation</span>
+                            <span className="sm:hidden">Transport</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setMeView('leave')}
+                            className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${meView === 'leave' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
+                        >
+                            <Icon name="calendar" size={14} />
+                            My Leave
+                        </button>
+                    </div>
+                )}
                 <div className="flex items-center gap-2 sm:gap-4">
                     {isTeamLead && (
                         <div className="hidden sm:flex items-center bg-gray-100 rounded-full p-0.5">
@@ -2087,6 +2114,7 @@ export const App = () => {
                 />
                 ) : (
                 /* ================= REGULAR USER ================= */
+                meView === 'transport' ? (
                 <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-white">
                     <BookingForm
                         activeTab={activeTab}
@@ -2101,28 +2129,28 @@ export const App = () => {
                         timeLabel={timeLabel}
                     />
                     <MyBookings bookings={userBookings} onDelete={handleDeleteBooking} onEdit={openEditBooking} pendingChanges={changeRequests} canSelfApprove={isTeamLead} />
-
-                    {/* Vacation Section */}
-                    <div className="border-t border-gray-100">
-                        {showVacationForm ? (
-                            <VacationRequestForm
-                                currentUser={currentUser}
-                                vacationBalances={vacationBalances}
-                                onSubmit={handleVacationRequest}
-                                onCancel={() => setShowVacationForm(false)}
-                                pushToast={pushToast}
-                            />
-                        ) : (
-                            <MyVacations
-                                vacations={vacations}
-                                currentUser={currentUser}
-                                vacationBalances={vacationBalances}
-                                onCancel={handleCancelVacation}
-                                onRequestVacation={() => setShowVacationForm(true)}
-                            />
-                        )}
-                    </div>
                 </div>
+                ) : (
+                <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-white">
+                    {showVacationForm ? (
+                        <VacationRequestForm
+                            currentUser={currentUser}
+                            vacationBalances={vacationBalances}
+                            onSubmit={handleVacationRequest}
+                            onCancel={() => setShowVacationForm(false)}
+                            pushToast={pushToast}
+                        />
+                    ) : (
+                        <MyVacations
+                            vacations={vacations}
+                            currentUser={currentUser}
+                            vacationBalances={vacationBalances}
+                            onCancel={handleCancelVacation}
+                            onRequestVacation={() => setShowVacationForm(true)}
+                        />
+                    )}
+                </div>
+                )
                 )}
             </main>
 
