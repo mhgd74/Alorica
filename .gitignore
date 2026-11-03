@@ -19,3 +19,6 @@ Alorica-Transport-System-Integration-Requirements.pdf
 # Icon generator files (keep only generated icons)
 generate-icons.js
 icon-original.png
+
+# Vercel CLI link — machine-specific, not shared
+.vercel
