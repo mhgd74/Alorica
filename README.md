@@ -148,10 +148,14 @@ logo.png                # شعار Alorica
 vendor/                 # المكتبات المستضافة محلياً
 supabase/migrations/    # مخطط قاعدة البيانات (Postgres) — مفعّل ✅
 api/                    # Vercel API Functions للربط مع Supabase
-lib/                    # مكتبات المساعدة (supabase.js, cors.js)
+lib/                    # مكتبات المساعدة (supabase.js, auth.js, guard.js, cors.js)
 vercel.json             # إعدادات نشر Vercel
-.vercelignore           # استثناءات رفع Vercel
-presentation.html       # عرض تقديمي للإدارة (مقارنة النظام القديم بالجديد)
+.vercelignore           # استثناءات رفع Vercel (يشمل docs/)
+docs/                   # وثائق داخلية — لا تُنشر مع الموقع
+  SYSTEM_REVIEW.md      # مراجعة النظام مقارنة بالحلول السحابية
+  SCREENSHOT_GUIDE.md   # دليل إنشاء لقطات شاشة للـ PWA
+  presentation.html     # عرض تقديمي للإدارة (مقارنة النظام القديم بالجديد)
+  archive/              # وثائق منجَزة تاريخياً (خطة PTO، أدلة الأيقونات/الـ PWA)
 data/                   # قاعدة SQLite المحلية (لا تُرفع إلى Git)
 certs/                  # شهادة TLS محلية (لا تُرفع إلى Git)
 ```

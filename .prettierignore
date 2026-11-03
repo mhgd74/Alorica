@@ -11,7 +11,7 @@ package-lock.json
 
 # Large files
 index.html
-presentation.html
+docs/presentation.html
 
 # CSS files (handled separately)
 styles.css

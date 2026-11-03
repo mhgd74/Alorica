@@ -5,3 +5,6 @@ dist
 .trae
 .log
 .figma
+
+# Internal documents — must not be published with the site
+docs
