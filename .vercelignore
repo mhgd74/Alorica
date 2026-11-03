@@ -9,8 +9,12 @@ dist
 # Internal documents — must not be published with the site
 docs
 
-# Build tooling and database migrations. Neither is needed to serve the site,
-# and the rewrite in vercel.json only sends unmatched paths to index.html, so a
-# real file here would be downloadable by anyone who guessed its name.
-scripts
+# Database migrations — not needed to serve the site, and the rewrite in
+# vercel.json only sends unmatched paths to index.html, so a real file here
+# would be downloadable by anyone who guessed its name.
 supabase
+
+# scripts/ must NOT be ignored. Vercel runs `npm install` on every deploy, and
+# the "prepare" script is scripts/install-hooks.js; it then runs the build,
+# which is scripts/build.js. Both files have to reach the builder or the
+# deploy dies before it starts.
