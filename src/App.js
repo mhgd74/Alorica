@@ -2058,15 +2058,18 @@ export var App = () => {
     name: "bus",
     size: 17,
     className: "text-gray-400"
-  }), "Buses & capacity")))), /*#__PURE__*/React.createElement("button", {
-    onClick: handleSignOut,
-    className: "p-1.5 sm:p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors",
-    title: "Sign out"
+  }), "Buses & capacity"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      setSettingsOpen(false);
+      handleSignOut();
+    },
+    className: "w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-red-600 hover:bg-red-50 transition-colors border-t border-gray-100 mt-1 pt-3"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "log-out",
-    size: 20,
-    className: "sm:w-6 sm:h-6"
-  })))), /*#__PURE__*/React.createElement("main", {
+    size: 17,
+    className: "text-red-400"
+  }), "Sign out")))))), /*#__PURE__*/React.createElement("main", {
     className: "".concat(showDashboard ? 'max-w-6xl' : 'max-w-4xl', " mx-auto p-4 sm:p-6 mt-6 sm:mt-8 fade-in")
   }, showDashboard ? /*#__PURE__*/React.createElement(AdminDashboard, {
     adminView: adminView,

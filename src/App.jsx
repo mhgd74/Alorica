@@ -2033,17 +2033,18 @@ export const App = () => {
                                             Buses &amp; capacity
                                         </button>
                                     )}
+                                    <button
+                                        type="button"
+                                        onClick={() => { setSettingsOpen(false); handleSignOut(); }}
+                                        className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-red-600 hover:bg-red-50 transition-colors border-t border-gray-100 mt-1 pt-3"
+                                    >
+                                        <Icon name="log-out" size={17} className="text-red-400" />
+                                        Sign out
+                                    </button>
                                 </div>
                             </>
                         )}
                     </div>
-                    <button
-                        onClick={handleSignOut}
-                        className="p-1.5 sm:p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"
-                        title="Sign out"
-                    >
-                        <Icon name="log-out" size={20} className="sm:w-6 sm:h-6" />
-                    </button>
                 </div>
             </nav>
 
