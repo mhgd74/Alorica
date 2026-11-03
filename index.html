@@ -97,7 +97,8 @@
             audit: 'alorica_audit_log',
             sheet: 'alorica_sheet_state',
             vacations: 'alorica_vacations',
-            vacationBalances: 'alorica_vacation_balances'
+            vacationBalances: 'alorica_vacation_balances',
+            settings: 'alorica_settings'
         };
 
         // Storage key -> collection name, so a queued change knows where it belongs.
@@ -105,6 +106,25 @@
             acc[STORAGE[name]] = name;
             return acc;
         }, {});
+
+        // Display preferences belong to this screen, not to the shared data, so
+        // they are kept out of STORAGE and are never replicated to other devices.
+        const PREF_KEY = 'alorica_preferences';
+
+        const DEFAULT_PREFERENCES = {
+            timeFormat: '12h',
+            defaultTab: 'arrival',
+            notifyApprovals: true,
+            notifyDecisions: true,
+            notifyGeneral: true
+        };
+
+        // Mirrored from React state so the plain formatters below can read the
+        // current choice without it being threaded through every call site.
+        let LIVE_PREFERENCES = { ...DEFAULT_PREFERENCES };
+        const setLivePreferences = (value) => {
+            LIVE_PREFERENCES = { ...DEFAULT_PREFERENCES, ...(value || {}) };
+        };
 
         // How long a team leader's change request waits for the employee.
         const CHANGE_REQUEST_TTL = 48 * 60 * 60 * 1000;
@@ -151,9 +171,9 @@
         const freshVacationBalance = (employeeId) => ({
             id: String(employeeId),
             employeeId,
-            annual: 21,
-            sick: 14,
-            personal: 7,
+            annual: LIVE_SETTINGS.vacationDefaults.annual,
+            sick: LIVE_SETTINGS.vacationDefaults.sick,
+            personal: LIVE_SETTINGS.vacationDefaults.personal,
             usedAnnual: 0,
             usedSick: 0,
             usedPersonal: 0
@@ -197,6 +217,10 @@
             timer: null,
             flushing: false,
             online: true,
+            // When the last successful poll finished — shown under Settings.
+            lastSyncAt: null,
+            // Set by the sync effect so "Sync now" can ask for a poll on demand.
+            pull: null,
             listeners: new Set()
         };
 
@@ -489,6 +513,9 @@
         };
 
         const formatTime12h = (t24) => {
+            if (!t24) return '';
+            // The 24-hour choice is display-only — times are stored as "HH:MM".
+            if (LIVE_PREFERENCES.timeFormat === '24h') return t24;
             const { hh, mm, ampm } = to12h(t24);
             return hh ? `${hh}:${mm} ${ampm}` : '';
         };
@@ -523,6 +550,56 @@
                 { shift: 'Night Shift', times: ['08:00', '08:30'] }
             ]
         };
+
+        // Admin-tunable settings. They travel as a single-record collection so a
+        // change the admin makes reaches every device through the same sync
+        // channel as bookings and leave.
+        const DEFAULT_VACATION_DAYS = { annual: 21, sick: 14, personal: 7, emergency: 3, unpaid: 0 };
+        const DEFAULT_BOOKING_RULES = { maxAdvanceDays: 30, oneBookingPerDay: true };
+
+        const copyShiftGroups = (groups) => (groups || []).map((group) => ({
+            shift: group.shift || '',
+            times: [...(group.times || [])]
+        }));
+
+        const freshSettings = () => [{
+            id: 'settings',
+            shiftSlots: {
+                arrival: copyShiftGroups(SHIFT_SLOTS.arrival),
+                departure: copyShiftGroups(SHIFT_SLOTS.departure)
+            },
+            vacationDefaults: { ...DEFAULT_VACATION_DAYS },
+            bookingRules: { ...DEFAULT_BOOKING_RULES },
+            updatedAt: null,
+            updatedBy: ''
+        }];
+
+        // Fills in whatever a stored record is missing, so a settings object
+        // saved before a new option existed keeps working after it is added.
+        const normalizeSettingsRecord = (raw) => {
+            const record = (Array.isArray(raw) ? raw[0] : raw) || {};
+            const slots = record.shiftSlots || {};
+            return {
+                id: 'settings',
+                shiftSlots: {
+                    arrival: Array.isArray(slots.arrival) && slots.arrival.length
+                        ? copyShiftGroups(slots.arrival) : copyShiftGroups(SHIFT_SLOTS.arrival),
+                    departure: Array.isArray(slots.departure) && slots.departure.length
+                        ? copyShiftGroups(slots.departure) : copyShiftGroups(SHIFT_SLOTS.departure)
+                },
+                vacationDefaults: { ...DEFAULT_VACATION_DAYS, ...(record.vacationDefaults || {}) },
+                bookingRules: { ...DEFAULT_BOOKING_RULES, ...(record.bookingRules || {}) },
+                updatedAt: record.updatedAt || null,
+                updatedBy: record.updatedBy || ''
+            };
+        };
+
+        const normalizeSettingsList = (raw) => [normalizeSettingsRecord(raw)];
+
+        // Mirrored from React state so the helpers below (shift presets, fresh
+        // leave balances) read the values the admin last saved.
+        let LIVE_SETTINGS = normalizeSettingsRecord(null);
+        const setLiveSettings = (value) => { LIVE_SETTINGS = normalizeSettingsRecord(value); };
 
         const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -1051,7 +1128,7 @@
             onSubmit,
             dropOffLabel, dropOffIcon, timeLabel
         }) => {
-            const shiftSlots = activeTab === 'arrival' ? SHIFT_SLOTS.arrival : SHIFT_SLOTS.departure;
+            const shiftSlots = LIVE_SETTINGS.shiftSlots[activeTab] || SHIFT_SLOTS[activeTab];
 
             return (
             <>
@@ -1217,7 +1294,7 @@
                 location: booking.location || ''
             });
             const [error, setError] = useState('');
-            const shiftSlots = form.type === 'Arrival' ? SHIFT_SLOTS.arrival : SHIFT_SLOTS.departure;
+            const shiftSlots = LIVE_SETTINGS.shiftSlots[form.type === 'Arrival' ? 'arrival' : 'departure'];
 
             // Sending the booking to a slot inside the next hour needs approval too,
             // otherwise the cutoff could simply be stepped around.
@@ -2700,6 +2777,406 @@
             </div>
         );
 
+        /* =============================================================
+         * Settings
+         * =============================================================
+         * Everything behind the gear in the header. Display preferences are
+         * personal and stay on this device; the admin sections below them are
+         * saved into the shared `settings` collection, so the shift presets
+         * and leave defaults reach every device.
+         */
+        const SettingsDialog = ({
+            section, onSection, onClose,
+            currentUser, role, isAdmin,
+            preferences, onPreferences,
+            settings, onSaveSettings,
+            onExportBackup, onImportBackup, importing, setImporting,
+            pwdForm, setPwdForm, pwdFeedback, onChangePassword,
+            lastSyncAt, syncOnline, onSyncNow, onClearLocalData
+        }) => {
+            const [draft, setDraft] = useState(settings);
+            const [shiftDir, setShiftDir] = useState('arrival');
+            const [saved, setSaved] = useState(false);
+
+            // Switching section starts from a clean copy, so a half-typed edit
+            // is never carried across. A save refreshes the copy too, but keeps
+            // the "Saved" note visible.
+            useEffect(() => { setDraft(settings); setSaved(false); }, [section]);
+            useEffect(() => { setDraft(settings); }, [settings]);
+
+            const sections = [
+                { key: 'preferences', label: 'Preferences', icon: 'sliders-horizontal' },
+                { key: 'account', label: 'Profile & password', icon: 'user' },
+                { key: 'notifications', label: 'Notifications', icon: 'bell' },
+                { key: 'data', label: 'Sync & data', icon: 'database' },
+                ...(isAdmin ? [
+                    { key: 'shifts', label: 'Shift times', icon: 'clock' },
+                    { key: 'leave', label: 'Leave defaults', icon: 'calendar' },
+                    { key: 'rules', label: 'Booking rules', icon: 'bus' }
+                ] : [])
+            ];
+            const adminSection = ['shifts', 'leave', 'rules'].indexOf(section) !== -1;
+
+            const save = () => {
+                onSaveSettings(draft);
+                setSaved(true);
+                setTimeout(() => setSaved(false), 2500);
+            };
+
+            const updateGroups = (dir, fn) => setDraft((prev) => ({
+                ...prev,
+                shiftSlots: { ...prev.shiftSlots, [dir]: fn(prev.shiftSlots[dir]) }
+            }));
+
+            const togglePref = (key) => onPreferences({ ...preferences, [key]: !preferences[key] });
+
+            const fieldCls = 'w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-alorica-blue text-sm text-gray-800';
+            const labelCls = 'block text-xs font-semibold text-gray-600 mb-1';
+
+            return (
+                <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black bg-opacity-40 p-3 sm:p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden fade-in">
+                        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <Icon name="settings" size={20} className="text-alorica-blue" />
+                                <h3 className="font-bold text-alorica-blue">Settings</h3>
+                            </div>
+                            <button type="button" onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-400" title="Close">
+                                <Icon name="x" size={18} />
+                            </button>
+                        </div>
+
+                        <div className="px-3 pt-3 flex gap-1 overflow-x-auto border-b border-gray-100">
+                            {sections.map((s) => (
+                                <button
+                                    key={s.key}
+                                    type="button"
+                                    onClick={() => onSection(s.key)}
+                                    className={`flex items-center gap-1.5 whitespace-nowrap px-3 py-2 rounded-t-lg text-xs font-semibold border-b-2 transition-colors ${section === s.key ? 'border-alorica-blue text-alorica-blue bg-alorica-light' : 'border-transparent text-gray-500 hover:text-alorica-blue'}`}
+                                >
+                                    <Icon name={s.icon} size={15} />
+                                    {s.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="p-5 overflow-y-auto flex-1 space-y-5">
+                            {section === 'preferences' && (
+                                <>
+                                    <div>
+                                        <label className={labelCls}>Time format</label>
+                                        <div className="inline-flex bg-gray-100 rounded-lg p-0.5">
+                                            {[['12h', '12-hour (1:30 PM)'], ['24h', '24-hour (13:30)']].map(([val, text]) => (
+                                                <button
+                                                    key={val}
+                                                    type="button"
+                                                    onClick={() => onPreferences({ ...preferences, timeFormat: val })}
+                                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${preferences.timeFormat === val ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500'}`}
+                                                >
+                                                    {text}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className={labelCls}>Open the booking form on</label>
+                                        <div className="inline-flex bg-gray-100 rounded-lg p-0.5">
+                                            {[['arrival', 'Arrival'], ['departure', 'Departure']].map(([val, text]) => (
+                                                <button
+                                                    key={val}
+                                                    type="button"
+                                                    onClick={() => onPreferences({ ...preferences, defaultTab: val })}
+                                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${preferences.defaultTab === val ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500'}`}
+                                                >
+                                                    {text}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-gray-400">These apply to this device only.</p>
+                                </>
+                            )}
+
+                            {section === 'account' && (
+                                <>
+                                    <div className="bg-alorica-light rounded-xl p-4">
+                                        <p className="text-sm font-bold text-alorica-blue">{currentUser.name || currentUser.username}</p>
+                                        <p className="text-xs text-gray-500 mt-0.5">{currentUser.username} · {ROLE_LABELS[role] || role}</p>
+                                    </div>
+
+                                    <form onSubmit={onChangePassword} className="space-y-3">
+                                        <h4 className="text-sm font-bold text-alorica-blue">Change password</h4>
+                                        <div>
+                                            <label className={labelCls}>New password</label>
+                                            <input
+                                                type="password"
+                                                autoComplete="new-password"
+                                                className={fieldCls}
+                                                value={pwdForm.next}
+                                                onChange={(e) => setPwdForm({ ...pwdForm, next: e.target.value })}
+                                                placeholder="At least 6 characters"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className={labelCls}>Confirm new password</label>
+                                            <input
+                                                type="password"
+                                                autoComplete="new-password"
+                                                className={fieldCls}
+                                                value={pwdForm.confirm}
+                                                onChange={(e) => setPwdForm({ ...pwdForm, confirm: e.target.value })}
+                                                placeholder="Type it again"
+                                            />
+                                        </div>
+                                        {pwdFeedback.text && (
+                                            <p className={`text-xs font-medium px-3 py-2 rounded-lg ${pwdFeedback.type === 'error' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
+                                                {pwdFeedback.text}
+                                            </p>
+                                        )}
+                                        <button
+                                            type="submit"
+                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-alorica-blue text-white text-sm font-bold hover:bg-opacity-90 transition-colors"
+                                        >
+                                            <Icon name="key-round" size={16} /> Update password
+                                        </button>
+                                    </form>
+                                </>
+                            )}
+
+                            {section === 'notifications' && (
+                                <div className="space-y-2">
+                                    {[
+                                        { key: 'notifyApprovals', label: 'Approvals waiting for me', hint: 'A booking change needs my answer' },
+                                        { key: 'notifyDecisions', label: 'Answers to my requests', hint: 'A request of mine was approved or declined' },
+                                        { key: 'notifyGeneral', label: 'Everything else', hint: 'Bookings, bus changes and reminders' }
+                                    ].map((row) => (
+                                        <label key={row.key} className="flex items-start gap-3 p-3 rounded-xl border border-gray-100 hover:bg-gray-50 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                className="mt-0.5 w-4 h-4 accent-alorica-blue"
+                                                checked={preferences[row.key]}
+                                                onChange={() => togglePref(row.key)}
+                                            />
+                                            <span>
+                                                <span className="block text-sm font-semibold text-gray-800">{row.label}</span>
+                                                <span className="block text-xs text-gray-500">{row.hint}</span>
+                                            </span>
+                                        </label>
+                                    ))}
+                                    <p className="text-xs text-gray-400">Hidden notifications are still recorded — only the bell list is filtered.</p>
+                                </div>
+                            )}
+
+                            {section === 'data' && (
+                                <>
+                                    <div className="flex items-center gap-3 p-3 rounded-xl border border-gray-100">
+                                        <span className={`w-2 h-2 rounded-full ${syncOnline ? 'bg-green-500' : 'bg-red-500'}`} />
+                                        <div className="flex-1">
+                                            <p className="text-sm font-semibold text-gray-800">{syncOnline ? 'Connected' : 'Offline — changes are queued'}</p>
+                                            <p className="text-xs text-gray-500">Last sync: {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : 'not yet this session'}</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={onSyncNow}
+                                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-xs font-bold text-alorica-blue hover:bg-alorica-light transition-colors"
+                                        >
+                                            <Icon name="refresh-cw" size={14} /> Sync now
+                                        </button>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={onExportBackup}
+                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-sm font-bold text-alorica-blue hover:bg-alorica-light transition-colors"
+                                        >
+                                            <Icon name="download" size={16} /> Export backup
+                                        </button>
+                                        <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-sm font-bold text-alorica-blue hover:bg-alorica-light transition-colors cursor-pointer">
+                                            <Icon name={importing ? 'refresh-cw' : 'upload'} size={16} />
+                                            {importing ? 'Restoring…' : 'Import backup'}
+                                            <input
+                                                type="file"
+                                                accept="application/json,.json"
+                                                className="hidden"
+                                                disabled={importing}
+                                                onChange={(e) => {
+                                                    const file = e.target.files && e.target.files[0];
+                                                    e.target.value = '';
+                                                    if (!file) return;
+                                                    setImporting(true);
+                                                    onImportBackup(file);
+                                                }}
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <div className="border-t border-gray-100 pt-4">
+                                        <p className="text-xs text-gray-500 mb-2">
+                                            Clearing the local cache removes this browser's copy only. Everything is downloaded again from the server on the next load.
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={onClearLocalData}
+                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 text-sm font-bold text-red-600 hover:bg-red-50 transition-colors"
+                                        >
+                                            <Icon name="trash-2" size={16} /> Clear local cache
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+
+                            {section === 'shifts' && isAdmin && (
+                                <>
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="inline-flex bg-gray-100 rounded-lg p-0.5">
+                                            {[['arrival', 'Arrival'], ['departure', 'Departure']].map(([val, text]) => (
+                                                <button
+                                                    key={val}
+                                                    type="button"
+                                                    onClick={() => setShiftDir(val)}
+                                                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${shiftDir === val ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500'}`}
+                                                >
+                                                    {text}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => updateGroups(shiftDir, (list) => [...list, { shift: 'New Shift', times: ['', ''] }])}
+                                            className="text-xs font-bold text-alorica-blue hover:underline"
+                                        >
+                                            + Add shift
+                                        </button>
+                                    </div>
+
+                                    {(draft.shiftSlots[shiftDir] || []).map((group, gi) => (
+                                        <div key={gi} className="p-3 rounded-xl border border-gray-100 space-y-2">
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    className={fieldCls}
+                                                    value={group.shift}
+                                                    placeholder="Shift name"
+                                                    onChange={(e) => updateGroups(shiftDir, (list) => list.map((g, i) => i === gi ? { ...g, shift: e.target.value } : g))}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => updateGroups(shiftDir, (list) => list.filter((_, i) => i !== gi))}
+                                                    className="p-2 rounded-lg text-red-500 hover:bg-red-50 shrink-0"
+                                                    title="Remove this shift"
+                                                >
+                                                    <Icon name="trash-2" size={16} />
+                                                </button>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                {[0, 1].map((ti) => (
+                                                    <input
+                                                        key={ti}
+                                                        type="time"
+                                                        className={fieldCls}
+                                                        value={group.times[ti] || ''}
+                                                        onChange={(e) => updateGroups(shiftDir, (list) => list.map((g, i) => i === gi ? { ...g, times: [0, 1].map((j) => j === ti ? e.target.value : (g.times[j] || '')) } : g))}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    <p className="text-xs text-gray-400">These are the pickup/drop-off slots offered in the booking form.</p>
+                                </>
+                            )}
+
+                            {section === 'leave' && isAdmin && (
+                                <>
+                                    <p className="text-xs text-gray-500">Days granted to an employee who has no balance record yet. Balances already on file are untouched.</p>
+                                    {Object.keys(DEFAULT_VACATION_DAYS).map((key) => (
+                                        <div key={key} className="flex items-center justify-between gap-3">
+                                            <span className="text-sm font-semibold text-gray-700">{VACATION_TYPES[key] ? VACATION_TYPES[key].label : key}</span>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                className="w-24 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-alorica-blue text-sm text-gray-800"
+                                                value={draft.vacationDefaults[key]}
+                                                onChange={(e) => setDraft((prev) => ({
+                                                    ...prev,
+                                                    vacationDefaults: { ...prev.vacationDefaults, [key]: Math.max(0, Number(e.target.value) || 0) }
+                                                }))}
+                                            />
+                                        </div>
+                                    ))}
+                                </>
+                            )}
+
+                            {section === 'rules' && isAdmin && (
+                                <>
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-gray-700">Booking window</p>
+                                            <p className="text-xs text-gray-500">How many days ahead a booking may be made.</p>
+                                        </div>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            className="w-24 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-alorica-blue text-sm text-gray-800"
+                                            value={draft.bookingRules.maxAdvanceDays}
+                                            onChange={(e) => setDraft((prev) => ({
+                                                ...prev,
+                                                bookingRules: { ...prev.bookingRules, maxAdvanceDays: Math.max(1, Number(e.target.value) || 1) }
+                                            }))}
+                                        />
+                                    </div>
+
+                                    <label className="flex items-start gap-3 p-3 rounded-xl border border-gray-100 hover:bg-gray-50 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-0.5 w-4 h-4 accent-alorica-blue"
+                                            checked={draft.bookingRules.oneBookingPerDay}
+                                            onChange={(e) => setDraft((prev) => ({
+                                                ...prev,
+                                                bookingRules: { ...prev.bookingRules, oneBookingPerDay: e.target.checked }
+                                            }))}
+                                        />
+                                        <span>
+                                            <span className="block text-sm font-semibold text-gray-800">One booking per employee per day</span>
+                                            <span className="block text-xs text-gray-500">Stops a second booking on a date that already has one.</span>
+                                        </span>
+                                    </label>
+
+                                    <p className="text-xs text-gray-500">
+                                        Seats per bus are set on the <span className="font-semibold">Buses</span> tab, where the fleet and each capacity are managed.
+                                    </p>
+                                </>
+                            )}
+                        </div>
+
+                        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-end gap-2 bg-gray-50">
+                            {saved && <span className="mr-auto text-xs font-semibold text-green-600">Saved</span>}
+                            {draft.updatedAt && !saved && (
+                                <span className="mr-auto text-xs text-gray-400">
+                                    Last changed by {draft.updatedBy || 'admin'}
+                                </span>
+                            )}
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-bold text-gray-600 hover:bg-white transition-colors"
+                            >
+                                Close
+                            </button>
+                            {adminSection && (
+                                <button
+                                    type="button"
+                                    onClick={save}
+                                    className="px-4 py-2 rounded-lg bg-alorica-blue text-white text-sm font-bold hover:bg-opacity-90 transition-colors"
+                                >
+                                    Save changes
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         // Vacation request form for employees
         const VacationRequestForm = ({ currentUser, vacationBalances, onSubmit, onCancel, pushToast }) => {
             const [form, setForm] = useState({
@@ -3129,6 +3606,16 @@
                 () => normalizeVacationBalances(loadJSON(STORAGE.vacationBalances, []))
             );
             const [showVacationForm, setShowVacationForm] = useState(false);
+            // Admin-tunable settings, shared through the sync channel.
+            const [settings, setSettings] = useState(
+                () => normalizeSettingsList(loadJSON(STORAGE.settings, freshSettings()))
+            );
+            // Personal display choices — this device only.
+            const [preferences, setPreferences] = useState(
+                () => ({ ...DEFAULT_PREFERENCES, ...loadJSON(PREF_KEY, {}) })
+            );
+            const [settingsOpen, setSettingsOpen] = useState(false);
+            const [settingsSection, setSettingsSection] = useState(null);
             // A team leader is an employee too, so they can flip between running the
             // dashboard and managing their own bookings.
             const [leaderMode, setLeaderMode] = useState('dashboard');
@@ -3165,6 +3652,8 @@
             useEffect(() => { saveJSON(STORAGE.sheet, sheetState); }, [sheetState]);
             useEffect(() => { saveJSON(STORAGE.vacations, vacations); }, [vacations]);
             useEffect(() => { saveJSON(STORAGE.vacationBalances, vacationBalances); }, [vacationBalances]);
+            useEffect(() => { saveJSON(STORAGE.settings, settings); }, [settings]);
+            useEffect(() => { saveJSON(PREF_KEY, preferences); }, [preferences]);
 
             /* ------------------ server sync ------------------
              * Every device polls the revision counter; when it moves the
@@ -3192,6 +3681,7 @@
                     if (touched.sheet) setSheetState(touched.sheet.length ? touched.sheet : freshSheet());
                     if (touched.vacations) setVacations(touched.vacations);
                     if (touched.vacationBalances) setVacationBalances(touched.vacationBalances);
+                    if (touched.settings) setSettings(touched.settings.length ? touched.settings : freshSettings());
                     // An empty fleet means "never configured", so defaults stay.
                     setBuses(touched.buses && touched.buses.length ? touched.buses : DEFAULT_BUSES);
                 };
@@ -3253,6 +3743,7 @@
                         failedPolls = 0;
                         // Stay "offline" while work is still waiting to be accepted.
                         if (SYNC.pending.size === 0) syncSetOnline(true);
+                        SYNC.lastSyncAt = Date.now();
                     } catch (err) {
                         if (cancelled) return;
                         // The browser cancels a request whenever the page is
@@ -3281,6 +3772,7 @@
                     });
 
                 const timer = setInterval(pull, 3000);
+                SYNC.pull = pull;
                 const onWake = () => { if (document.visibilityState === 'visible') pull(); };
                 document.addEventListener('visibilitychange', onWake);
                 window.addEventListener('focus', onWake);
@@ -3288,6 +3780,7 @@
                 return () => {
                     cancelled = true;
                     clearInterval(timer);
+                    SYNC.pull = null;
                     document.removeEventListener('visibilitychange', onWake);
                     window.removeEventListener('focus', onWake);
                     SYNC.listeners.delete(listener);
@@ -3440,8 +3933,15 @@
             };
 
             const myNotifications = useMemo(
-                () => notifications.filter((n) => currentUser && n.to === currentUser.username),
-                [notifications, currentUser]
+                () => notifications.filter((n) => {
+                    if (!currentUser || n.to !== currentUser.username) return false;
+                    // The bell respects the notification switches in Settings;
+                    // the records themselves are still kept in the collection.
+                    if (n.kind === 'approval') return preferences.notifyApprovals;
+                    if (n.kind === 'decision') return preferences.notifyDecisions;
+                    return preferences.notifyGeneral;
+                }),
+                [notifications, currentUser, preferences]
             );
 
             // Bulk re-distribution applies immediately (no approval) but the affected
@@ -3722,12 +4222,25 @@
                     return;
                 }
 
-                const dayExists = bookings.some(
-                    (b) => b.employeeId === employeeId && b.date === date
-                );
-                if (dayExists) {
-                    pushToast('You already have a booking for this day. Please delete it first if you want to change it.', 'error');
-                    return;
+                // Admin rule: how far ahead a booking may be placed.
+                const maxAdvanceDays = LIVE_SETTINGS.bookingRules.maxAdvanceDays;
+                if (maxAdvanceDays > 0) {
+                    const limit = new Date(`${todayISO()}T00:00:00`);
+                    limit.setDate(limit.getDate() + maxAdvanceDays);
+                    if (new Date(`${date}T00:00:00`) > limit) {
+                        pushToast(`Bookings can only be made up to ${maxAdvanceDays} day(s) ahead.`, 'error');
+                        return;
+                    }
+                }
+
+                if (LIVE_SETTINGS.bookingRules.oneBookingPerDay) {
+                    const dayExists = bookings.some(
+                        (b) => b.employeeId === employeeId && b.date === date
+                    );
+                    if (dayExists) {
+                        pushToast('You already have a booking for this day. Please delete it first if you want to change it.', 'error');
+                        return;
+                    }
                 }
 
                 const base = {
@@ -3759,6 +4272,20 @@
             const currentRole = roleOf(currentUser);
             const isAdmin = currentRole === 'admin';
             const isTeamLead = currentRole === 'teamlead';
+
+            // Mirrored on every render into the module-level copies the plain
+            // helpers read (time format, shift presets, leave defaults), so the
+            // first paint already reflects the current choices. Memoised so the
+            // settings panel does not see a fresh object on every render.
+            const appSettings = useMemo(() => normalizeSettingsRecord(settings[0]), [settings]);
+            setLiveSettings(appSettings);
+            setLivePreferences(preferences);
+
+            // The default tab preference only decides where the booking form
+            // opens — the user can still switch at any time afterwards.
+            useEffect(() => {
+                if (isLoggedIn) setActiveTab(LIVE_PREFERENCES.defaultTab);
+            }, [isLoggedIn]);
 
             // The admin always runs the dashboard; a team leader chooses between it
             // and their own booking screen.
@@ -4692,7 +5219,8 @@
                     notifications,
                     buses,
                     audit: auditLog,
-                    sheet: sheetState
+                    sheet: sheetState,
+                    settings
                 };
                 const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
@@ -4721,6 +5249,7 @@
                         if (Array.isArray(data.buses) && data.buses.length) setBuses(data.buses);
                         if (Array.isArray(data.audit)) setAuditLog(data.audit);
                         if (Array.isArray(data.sheet) && data.sheet.length) setSheetState(data.sheet);
+                        if (data.settings) setSettings(normalizeSettingsList(data.settings));
                         logAudit('backup.restore', file.name, 'Backup file restored');
                         pushToast('Backup restored successfully.', 'success');
                     } catch (err) {
@@ -4734,6 +5263,44 @@
                     setImporting(false);
                 };
                 reader.readAsText(file);
+            };
+
+            /* ------------------ settings ------------------ */
+            // The admin sections of the settings panel write into the shared
+            // `settings` collection, so the shift presets and leave defaults
+            // travel to every device like any other record.
+            const handleSaveSettings = (next) => {
+                const record = {
+                    ...normalizeSettingsRecord(next),
+                    updatedAt: new Date().toISOString(),
+                    updatedBy: currentUser ? currentUser.username : ''
+                };
+                setSettings([record]);
+                logAudit('settings.update', 'Application settings', 'Shift times, leave defaults or booking rules were updated');
+                pushToast('Settings saved.', 'success');
+            };
+
+            const handleUpdatePreferences = (next) => {
+                setPreferences({ ...DEFAULT_PREFERENCES, ...next });
+            };
+
+            const handleSyncNow = async () => {
+                if (SYNC.pull) await SYNC.pull();
+                else await syncFlush();
+            };
+
+            const handleClearLocalData = () => {
+                // Closed first: the confirm dialog sits below the settings
+                // panel, so leaving it open would hide the question.
+                setSettingsSection(null);
+                requestConfirm(
+                    'Clear this browser\'s local cache? Nothing is deleted from the server — everything is downloaded again on the next load.',
+                    async () => {
+                        await syncFlush();
+                        Object.values(STORAGE).forEach((key) => localStorage.removeItem(key));
+                        window.location.reload();
+                    }
+                );
             };
 
             /* ------------------ derived ------------------ */
@@ -4802,6 +5369,32 @@
                     </div>
                 )}
 
+                {settingsSection && (
+                    <SettingsDialog
+                        section={settingsSection}
+                        onSection={setSettingsSection}
+                        onClose={() => setSettingsSection(null)}
+                        currentUser={currentUser}
+                        role={currentRole}
+                        isAdmin={isAdmin}
+                        preferences={preferences}
+                        onPreferences={handleUpdatePreferences}
+                        settings={appSettings}
+                        onSaveSettings={handleSaveSettings}
+                        onExportBackup={handleExportBackup}
+                        onImportBackup={handleImportBackup}
+                        importing={importing}
+                        setImporting={setImporting}
+                        pwdForm={pwdForm}
+                        setPwdForm={setPwdForm}
+                        pwdFeedback={pwdFeedback}
+                        onChangePassword={handleChangePassword}
+                        lastSyncAt={SYNC.lastSyncAt}
+                        syncOnline={syncOnline}
+                        onSyncNow={handleSyncNow}
+                        onClearLocalData={handleClearLocalData}
+                    />
+                )}
                 {confirmRequest && (
                     <ConfirmDialog
                         message={confirmRequest.message}
@@ -4900,6 +5493,54 @@
                                 onDecide={decideChangeRequest}
                                 pendingRequest={(requestId) => changeRequests.find((r) => r.id === requestId && r.status === 'pending')}
                             />
+                            <div className="relative">
+                                <button
+                                    type="button"
+                                    onClick={() => setSettingsOpen((open) => !open)}
+                                    className="p-1.5 sm:p-2 hover:bg-blue-50 rounded-full text-alorica-blue transition-colors"
+                                    title="Settings"
+                                >
+                                    <Icon name="settings" size={20} className="sm:w-6 sm:h-6" />
+                                </button>
+                                {settingsOpen && (
+                                    <>
+                                        <div className="fixed inset-0 z-[95]" onClick={() => setSettingsOpen(false)} />
+                                        <div className="absolute right-0 mt-2 w-60 bg-white rounded-2xl shadow-2xl border border-gray-100 z-[100] py-2 fade-in">
+                                            {[
+                                                { key: 'preferences', label: 'Preferences', icon: 'sliders-horizontal' },
+                                                { key: 'account', label: 'Profile & password', icon: 'user' },
+                                                { key: 'notifications', label: 'Notifications', icon: 'bell' },
+                                                { key: 'data', label: 'Sync & data', icon: 'database' },
+                                                ...(isAdmin ? [
+                                                    { key: 'shifts', label: 'Shift times', icon: 'clock' },
+                                                    { key: 'leave', label: 'Leave defaults', icon: 'calendar' },
+                                                    { key: 'rules', label: 'Booking rules', icon: 'bus' }
+                                                ] : [])
+                                            ].map((item) => (
+                                                <button
+                                                    key={item.key}
+                                                    type="button"
+                                                    onClick={() => { setSettingsOpen(false); setSettingsSection(item.key); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-gray-700 hover:bg-alorica-light hover:text-alorica-blue transition-colors"
+                                                >
+                                                    <Icon name={item.icon} size={17} className="text-gray-400" />
+                                                    {item.label}
+                                                </button>
+                                            ))}
+                                            {isAdmin && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { setSettingsOpen(false); setSettingsSection(null); setAdminView('buses'); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-medium text-gray-700 hover:bg-alorica-light hover:text-alorica-blue transition-colors border-t border-gray-100 mt-1 pt-3"
+                                                >
+                                                    <Icon name="bus" size={17} className="text-gray-400" />
+                                                    Buses &amp; capacity
+                                                </button>
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
                             <button
                                 onClick={handleSignOut}
                                 className="p-1.5 sm:p-2 hover:bg-red-50 rounded-full text-red-500 transition-colors"

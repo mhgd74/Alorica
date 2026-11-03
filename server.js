@@ -37,6 +37,7 @@ const COLLECTIONS = [
   'sheet',
   'vacations',
   'vacationBalances',
+  'settings',
 ];
 
 /* =============================================================
