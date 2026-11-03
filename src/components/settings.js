@@ -56,6 +56,10 @@ export var SettingsDialog = _ref => {
   var [shiftDir, setShiftDir] = useState('arrival');
   var [saved, setSaved] = useState(false);
   var isTeamLead = role === 'teamlead';
+  // Backup files carry every account, the audit trail and the shared
+  // settings, and restoring one writes straight to the database, so the
+  // buttons belong to the technical role that owns the data tools.
+  var isAdmin = role === 'admin';
 
   // Switching section starts from a clean copy, so a half-typed edit
   // is never carried across. A save refreshes the copy too, but keeps
@@ -262,7 +266,7 @@ export var SettingsDialog = _ref => {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "refresh-cw",
     size: 14
-  }), " Sync now")), /*#__PURE__*/React.createElement("div", {
+  }), " Sync now")), isAdmin && /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-2"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",

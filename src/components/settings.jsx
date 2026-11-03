@@ -33,6 +33,10 @@ export const SettingsDialog = ({
     const [shiftDir, setShiftDir] = useState('arrival');
     const [saved, setSaved] = useState(false);
     const isTeamLead = role === 'teamlead';
+    // Backup files carry every account, the audit trail and the shared
+    // settings, and restoring one writes straight to the database, so the
+    // buttons belong to the technical role that owns the data tools.
+    const isAdmin = role === 'admin';
 
     // Switching section starts from a clean copy, so a half-typed edit
     // is never carried across. A save refreshes the copy too, but keeps
@@ -220,32 +224,34 @@ export const SettingsDialog = ({
                                 </button>
                             </div>
 
-                            <div className="flex flex-wrap gap-2">
-                                <button
-                                    type="button"
-                                    onClick={onExportBackup}
-                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-sm font-bold text-alorica-blue hover:bg-alorica-light transition-colors"
-                                >
-                                    <Icon name="download" size={16} /> Export backup
-                                </button>
-                                <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-sm font-bold text-alorica-blue hover:bg-alorica-light transition-colors cursor-pointer">
-                                    <Icon name={importing ? 'refresh-cw' : 'upload'} size={16} />
-                                    {importing ? 'Restoring…' : 'Import backup'}
-                                    <input
-                                        type="file"
-                                        accept="application/json,.json"
-                                        className="hidden"
-                                        disabled={importing}
-                                        onChange={(e) => {
-                                            const file = e.target.files && e.target.files[0];
-                                            e.target.value = '';
-                                            if (!file) return;
-                                            setImporting(true);
-                                            onImportBackup(file);
-                                        }}
-                                    />
-                                </label>
-                            </div>
+                            {isAdmin && (
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={onExportBackup}
+                                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-sm font-bold text-alorica-blue hover:bg-alorica-light transition-colors"
+                                    >
+                                        <Icon name="download" size={16} /> Export backup
+                                    </button>
+                                    <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-sm font-bold text-alorica-blue hover:bg-alorica-light transition-colors cursor-pointer">
+                                        <Icon name={importing ? 'refresh-cw' : 'upload'} size={16} />
+                                        {importing ? 'Restoring…' : 'Import backup'}
+                                        <input
+                                            type="file"
+                                            accept="application/json,.json"
+                                            className="hidden"
+                                            disabled={importing}
+                                            onChange={(e) => {
+                                                const file = e.target.files && e.target.files[0];
+                                                e.target.value = '';
+                                                if (!file) return;
+                                                setImporting(true);
+                                                onImportBackup(file);
+                                            }}
+                                        />
+                                    </label>
+                                </div>
+                            )}
 
                             <div className="border-t border-gray-100 pt-4">
                                 <p className="text-xs text-gray-500 mb-2">
