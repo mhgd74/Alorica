@@ -3,11 +3,12 @@
  * Installs the Git hook that keeps the compiled modules in src/ in step with
  * their .jsx sources.
  *
- * The compiled files are committed on purpose. Vercel serves this repository as
- * a plain static site (vercel.json sets buildCommand: null), so anything the
- * browser loads has to be in the tree — there is no deploy-time build to produce
- * it. The hook is what stops the committed .js from drifting away from the .jsx
- * it was generated from.
+ * The compiled files are committed on purpose. Vercel serves this repository
+ * from its root (vercel.json sets outputDirectory: "."), so anything the
+ * browser loads has to be in the tree; the deploy cannot rely on producing it.
+ * Vercel does re-run `npm run build` as a safety net, but the hook is what
+ * stops the committed .js from drifting away from the .jsx it was generated
+ * from between deploys.
  *
  * Run automatically by `npm install` through the "prepare" script. Outside a Git
  * checkout it does nothing, so installs from a tarball or in CI are unaffected.
