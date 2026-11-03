@@ -71,6 +71,11 @@ export const COLLECTION_BY_KEY = Object.keys(STORAGE).reduce((acc, name) => {
 }, {});
 
 
+// The queue of changes waiting for the server. It is device-local bookkeeping,
+// not shared data, so it stays out of STORAGE and is never replicated.
+export const PENDING_KEY = 'alorica.sync_pending';
+
+
 // Display preferences belong to this screen, not to the shared data, so
 // they are kept out of STORAGE and are never replicated to other devices.
 export const PREF_KEY = 'alorica_preferences';

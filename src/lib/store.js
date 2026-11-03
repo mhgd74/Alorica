@@ -4,7 +4,7 @@
  * so nothing is overwritten by a device that was slow to update.
  */
 
-import { COLLECTION_BY_KEY, STORAGE } from './config.js';
+import { COLLECTION_BY_KEY, STORAGE, PENDING_KEY } from './config.js';
 import { apiFetch } from './session.js';
 
 
@@ -29,6 +29,9 @@ export const SYNC = {
     lastSyncAt: null,
     // Set by the sync effect so "Sync now" can ask for a poll on demand.
     pull: null,
+    // Raised when the server refuses a batch: the local copy no longer
+    // matches what was accepted, so the next poll re-reads everything.
+    needsResync: false,
     listeners: new Set()
 };
 
@@ -55,6 +58,55 @@ export const syncSetOnline = (online) => {
     if (SYNC.online === online) return;
     SYNC.online = online;
     SYNC.listeners.forEach((fn) => fn(online));
+};
+
+
+/* The queue is mirrored into localStorage so a change made a moment before
+ * the tab was closed is still sent on the next visit. It is rewritten
+ * whenever the queue changes, and removed once the server has taken it. */
+const syncSavePending = () => {
+    const saved = {};
+    SYNC.pending.forEach((queued, key) => {
+        if (!queued.upsert.size && !queued.remove.size) return;
+        saved[key] = { upsert: [...queued.upsert.values()], remove: [...queued.remove] };
+    });
+
+    try {
+        if (Object.keys(saved).length) localStorage.setItem(PENDING_KEY, JSON.stringify(saved));
+        else localStorage.removeItem(PENDING_KEY);
+    } catch (e) {
+        /* storage unavailable */
+    }
+};
+
+
+const syncLoadPending = () => {
+    const saved = loadJSON(PENDING_KEY, null);
+    const restored = new Map();
+    if (!saved || typeof saved !== 'object') return restored;
+
+    Object.keys(saved).forEach((key) => {
+        const queued = saved[key];
+        if (!queued || typeof queued !== 'object') return;
+        const upsert = new Map(
+            (Array.isArray(queued.upsert) ? queued.upsert : []).map((item) => [syncKeyOf(item), item])
+        );
+        const remove = new Set(Array.isArray(queued.remove) ? queued.remove : []);
+        if (upsert.size || remove.size) restored.set(key, { upsert, remove });
+    });
+
+    return restored;
+};
+
+
+SYNC.pending = syncLoadPending();
+
+
+// Throws the queue away, in memory and on disk. Used when the session ends:
+// the work belongs to the account that is leaving.
+export const syncClearPending = () => {
+    SYNC.pending.clear();
+    syncSavePending();
 };
 
 
@@ -87,6 +139,7 @@ const syncRequeue = (key, diff) => {
         queued.upsert.delete(id);
     });
     SYNC.pending.set(key, queued);
+    syncSavePending();
 };
 
 
@@ -137,11 +190,15 @@ export const syncFlush = async () => {
     } catch (err) {
         // A 4xx means the server will never accept this batch — a role
         // that may not touch a collection, for instance. Retrying would
-        // only wedge the queue, so the batch is dropped and reported.
+        // only wedge the queue, so the batch is dropped. The local copy
+        // still holds the change the server just refused, so a re-read
+        // is asked for: what is on screen goes back to what was stored
+        // instead of quietly drifting away from it.
         // Anything else (offline, 5xx) is transient: the batch goes
         // back in and is retried.
         if (/\((4\d\d)\)/.test(err.message)) {
             console.warn('Sync batch rejected by the server:', err.message, ops);
+            SYNC.needsResync = true;
         } else {
             ops.forEach((op) => syncRequeue(STORAGE[op.collection], { upsert: op.upsert, remove: op.remove }));
             SYNC.pending = new Map([...SYNC.pending].filter(([, q]) => q.upsert.size || q.remove.size));
@@ -149,6 +206,7 @@ export const syncFlush = async () => {
         syncSetOnline(false);
     } finally {
         SYNC.flushing = false;
+        syncSavePending();
     }
 };
 
@@ -159,10 +217,18 @@ export const syncFlush = async () => {
 // the server copy would wipe an edit that has not been accepted yet.
 export const syncApplyRemote = (collections) => {
     const touched = {};
+
+    // A response that is not the shape this expects is ignored, so a bad
+    // body can never be written over the local copy.
+    if (!collections || typeof collections !== 'object') return touched;
+
     Object.keys(STORAGE).forEach((name) => {
         if (!(name in collections)) return;
         if (SYNC.pending.has(STORAGE[name])) return;
-        const value = collections[name] || [];
+        // A collection that is not a list is left alone rather than
+        // written over the local copy as something it is not.
+        if (!Array.isArray(collections[name])) return;
+        const value = collections[name];
         SYNC.cache[STORAGE[name]] = value;
         try {
             localStorage.setItem(STORAGE[name], JSON.stringify(value));

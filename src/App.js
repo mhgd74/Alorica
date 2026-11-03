@@ -28,7 +28,7 @@ import { buildPrintHtml, buildWorkbook, ensureXlsx } from './lib/report.js';
 import { ROLE_LABELS, roleOf } from './lib/roles.js';
 import { AUTH, apiFetch, authClear, authForget, authRead, authRemember } from './lib/session.js';
 import { LIVE_SETTINGS, freshSettings, normalizeSettingsList, normalizeSettingsRecord, setLiveSettings } from './lib/settings.js';
-import { SYNC, loadJSON, saveJSON, syncApplyRemote, syncFlush, syncSetOnline } from './lib/store.js';
+import { SYNC, loadJSON, saveJSON, syncApplyRemote, syncClearPending, syncFlush, syncSetOnline } from './lib/store.js';
 import { freshVacationBalance, normalizeVacationBalances } from './lib/vacation.js';
 var {
   useState,
@@ -253,12 +253,20 @@ export var App = () => {
           // A batch can fail without the revision moving, so push any
           // leftover work before deciding whether anything new arrived.
           if (SYNC.pending.size > 0) yield syncFlush();
-          if (rev !== SYNC.rev) {
+          // A refusal, or a revision that moved, both mean the local
+          // copy is out of date — one re-read puts it back in step.
+          var refused = SYNC.needsResync;
+          if (rev !== SYNC.rev || refused) {
             var state = yield (yield apiFetch('/api/state', {
               cache: 'no-store'
             })).json();
-            SYNC.rev = state.rev;
-            applyServerState(state.collections);
+            if (state && typeof state.rev === 'number' && state.collections) {
+              SYNC.rev = state.rev;
+              applyServerState(state.collections);
+              SYNC.needsResync = false;
+            } else {
+              console.warn('Ignoring an unexpected state response from the server.');
+            }
           }
           failedPolls = 0;
           // Stay "offline" while work is still waiting to be accepted.
@@ -318,7 +326,7 @@ export var App = () => {
       setCurrentUser(null);
       // Work queued under the lapsed session must not be pushed
       // by whoever signs in next.
-      SYNC.pending.clear();
+      syncClearPending();
     };
     return () => {
       AUTH.onExpired = null;
@@ -747,7 +755,7 @@ export var App = () => {
     // throw away work this session never managed to send — it
     // belongs to the account that is leaving.
     authClear();
-    SYNC.pending.clear();
+    syncClearPending();
     localStorage.removeItem('rememberMe');
     setRememberMe(false);
   };

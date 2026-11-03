@@ -1,6 +1,6 @@
 const { applyOps, getRev } = require('../lib/supabase');
 const { claimsFromRequest } = require('../lib/auth');
-const { setCorsHeaders } = require('../lib/cors');
+const { setCorsHeaders, requireTrustedOrigin } = require('../lib/cors');
 
 module.exports = async (req, res) => {
   setCorsHeaders(req, res);
@@ -14,6 +14,8 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  if (!requireTrustedOrigin(req, res)) return;
 
   try {
     const currentRev = await getRev();
