@@ -14,13 +14,17 @@ import { Icon } from './common.js';
 import { VacationReports, VacationReview } from './vacation.js';
 import { uniqueEmployeeCount } from '../lib/booking.js';
 import { CHANGE_REQUEST_TTL, DEFAULT_USERS, SHEET_STATUS, WAITLIST } from '../lib/config.js';
-import { changeValue, formatTime12h } from '../lib/format.js';
+import { changeValue, formatTime12h, todayISO } from '../lib/format.js';
 import { ROLE_LABELS, roleOf } from '../lib/roles.js';
 var {
   useState,
   useEffect,
   useMemo
 } = React;
+
+// The account table is paged rather than scrolled: a call centre can hold
+// far more accounts than fit on one screen.
+var USER_PAGE_SIZE = 10;
 export var AdminDashboard = _ref => {
   var {
     adminView,
@@ -59,6 +63,8 @@ export var AdminDashboard = _ref => {
     setUserFeedback,
     onCreateUser,
     onDeleteUser,
+    onResetUserPassword,
+    onUpdateUserRole,
     allUsers,
     currentUser,
     passwordRequests,
@@ -66,13 +72,8 @@ export var AdminDashboard = _ref => {
     onDismissRequest,
     pendingChanges,
     auditLog,
-    importing,
-    setImporting,
-    onExportBackup,
-    onImportBackup,
     role,
     onSubmitToAdmin,
-    pendingReviewCount,
     sheetStatus,
     sheet,
     onSendBack,
@@ -87,6 +88,10 @@ export var AdminDashboard = _ref => {
   } = _ref;
   var isTeamLead = role === 'teamlead';
   var isAdmin = role === 'admin';
+  var [userQuery, setUserQuery] = useState('');
+  var [userPage, setUserPage] = useState(1);
+  var [auditQuery, setAuditQuery] = useState('');
+  var [auditCategory, setAuditCategory] = useState('all');
   // A booking can only have one approval request open at a time.
   var pendingFor = bookingId => pendingChanges.find(r => r.bookingId === bookingId && r.status === 'pending');
 
@@ -117,6 +122,95 @@ export var AdminDashboard = _ref => {
     };
   };
   var hoursLeft = r => Math.max(0, Math.ceil((CHANGE_REQUEST_TTL - (Date.now() - new Date(r.requestedAt).getTime())) / 3600000));
+
+  /* ------------------ quick date ranges ------------------ */
+  // The sheet is normally printed for a single day, so the windows the team
+  // leader reaches for most often are one tap away instead of two pickers.
+  var isoShift = days => {
+    var d = new Date(todayISO());
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  var quickRange = useMemo(() => {
+    var {
+      from,
+      to
+    } = filters;
+    if (!from && !to) return 'all';
+    var today = todayISO();
+    if (from === today && to === today) return 'today';
+    var tomorrow = isoShift(1);
+    if (from === tomorrow && to === tomorrow) return 'tomorrow';
+    if (from === today && to === isoShift(6)) return 'week';
+    return 'custom';
+  }, [filters]);
+  var applyQuickRange = key => {
+    if (key === 'all') return setFilters(_objectSpread(_objectSpread({}, filters), {}, {
+      from: '',
+      to: ''
+    }));
+    if (key === 'week') return setFilters(_objectSpread(_objectSpread({}, filters), {}, {
+      from: todayISO(),
+      to: isoShift(6)
+    }));
+    var day = key === 'tomorrow' ? isoShift(1) : todayISO();
+    return setFilters(_objectSpread(_objectSpread({}, filters), {}, {
+      from: day,
+      to: day
+    }));
+  };
+
+  // The waitlist figure in the statistics strip belongs to the range on
+  // screen; the fleet tab keeps the whole-fleet figure.
+  var filteredWaitlistCount = filteredBookings.filter(b => !b.bus || b.bus === WAITLIST).length;
+
+  /* ------------------ account table ------------------ */
+  var adminCount = allUsers.filter(u => roleOf(u) === 'admin').length;
+  var teamLeadCount = allUsers.filter(u => roleOf(u) === 'teamlead').length;
+  var pendingSetupCount = allUsers.filter(u => u.mustChangePassword).length;
+  var visibleUsers = useMemo(() => {
+    var needle = userQuery.trim().toLowerCase();
+    if (!needle) return allUsers;
+    return allUsers.filter(u => "".concat(u.name || '', " ").concat(u.username || '').toLowerCase().includes(needle));
+  }, [allUsers, userQuery]);
+  var userPageCount = Math.max(1, Math.ceil(visibleUsers.length / USER_PAGE_SIZE));
+  // The list shrinks under the current page when the search narrows it.
+  var safeUserPage = Math.min(userPage, userPageCount);
+  var pagedUsers = visibleUsers.slice((safeUserPage - 1) * USER_PAGE_SIZE, safeUserPage * USER_PAGE_SIZE);
+
+  /* ------------------ activity log ------------------ */
+  // The part before the dot groups the actions ("user.create" → "user").
+  var auditGroups = useMemo(() => {
+    var groups = new Set();
+    auditLog.forEach(entry => groups.add(String(entry.action || '').split('.')[0]));
+    groups.delete('');
+    return [...groups].sort();
+  }, [auditLog]);
+  var visibleAudit = useMemo(() => {
+    var needle = auditQuery.trim().toLowerCase();
+    return [...auditLog].reverse().filter(entry => {
+      if (auditCategory !== 'all' && String(entry.action || '').split('.')[0] !== auditCategory) return false;
+      if (!needle) return true;
+      return [entry.action, entry.target, entry.details, entry.actorName, entry.actor].some(value => String(value || '').toLowerCase().includes(needle));
+    });
+  }, [auditLog, auditQuery, auditCategory]);
+  var exportAudit = () => {
+    var quote = value => "\"".concat(String(value == null ? '' : value).replace(/"/g, '""'), "\"");
+    var rows = [['When', 'Actor', 'Role', 'Action', 'Target', 'Details']].concat(visibleAudit.map(entry => [new Date(entry.at).toLocaleString(), entry.actorName || entry.actor || '', ROLE_LABELS[entry.actorRole] || entry.actorRole || '', entry.action || '', entry.target || '', entry.details || '']));
+    var csv = rows.map(row => row.map(quote).join(',')).join('\r\n');
+    var blob = new Blob([csv], {
+      type: 'text/csv;charset=utf-8'
+    });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = "Alorica_activity_".concat(new Date().toISOString().slice(0, 10), ".csv");
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    pushToast('Activity log exported.', 'success');
+  };
   return /*#__PURE__*/React.createElement("div", {
     className: "bg-white rounded-3xl shadow-2xl overflow-hidden border border-white"
   }, /*#__PURE__*/React.createElement("div", {
@@ -139,8 +233,8 @@ export var AdminDashboard = _ref => {
     className: "ml-1 bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5 min-w-[1.25rem]"
   }, tab.badge)))), /*#__PURE__*/React.createElement("div", {
     className: "p-4 sm:p-8"
-  }, adminView === 'bookings' && isTeamLead && /*#__PURE__*/React.createElement(React.Fragment, null, isTeamLead && /*#__PURE__*/React.createElement("div", {
-    className: "max-w-4xl mx-auto mb-6 grid grid-cols-2 lg:grid-cols-4 gap-4"
+  }, adminView === 'bookings' && isTeamLead && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "max-w-4xl mx-auto mb-2 grid grid-cols-2 lg:grid-cols-4 gap-4"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4 text-center border border-blue-200"
   }, /*#__PURE__*/React.createElement("div", {
@@ -178,44 +272,20 @@ export var AdminDashboard = _ref => {
   }, buses.length)), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-600 font-semibold"
   }, "Available Buses")), /*#__PURE__*/React.createElement("div", {
-    className: "rounded-2xl p-4 text-center border ".concat(waitlistCount > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200')
+    className: "rounded-2xl p-4 text-center border ".concat(filteredWaitlistCount > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200')
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-center gap-2 mb-1"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "clock",
     size: 20,
-    className: waitlistCount > 0 ? 'text-red-600' : 'text-gray-600'
+    className: filteredWaitlistCount > 0 ? 'text-red-600' : 'text-gray-600'
   }), /*#__PURE__*/React.createElement("p", {
-    className: "text-3xl font-black ".concat(waitlistCount > 0 ? 'text-red-600' : 'text-gray-600')
-  }, waitlistCount)), /*#__PURE__*/React.createElement("p", {
+    className: "text-3xl font-black ".concat(filteredWaitlistCount > 0 ? 'text-red-600' : 'text-gray-600')
+  }, filteredWaitlistCount)), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-600 font-semibold"
-  }, "On Waitlist"))), !isTeamLead && /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 max-w-4xl mx-auto"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bg-alorica-light rounded-2xl p-4 text-center"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-3xl font-black text-alorica-blue"
-  }, filteredBookings.length), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-500 mt-1"
-  }, "Bookings")), /*#__PURE__*/React.createElement("div", {
-    className: "bg-alorica-light rounded-2xl p-4 text-center"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-3xl font-black text-alorica-blue"
-  }, dayGroups.length), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-500 mt-1"
-  }, "Days")), /*#__PURE__*/React.createElement("div", {
-    className: "bg-alorica-light rounded-2xl p-4 text-center"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-3xl font-black text-alorica-blue"
-  }, uniqueEmployeeCount(filteredBookings)), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-500 mt-1"
-  }, "Employees")), /*#__PURE__*/React.createElement("div", {
-    className: "bg-alorica-light rounded-2xl p-4 text-center"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-3xl font-black ".concat(waitlistCount ? 'text-red-600' : 'text-alorica-blue')
-  }, waitlistCount), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-500 mt-1"
-  }, "On waitlist"))), /*#__PURE__*/React.createElement("div", {
+  }, "On Waitlist"))), /*#__PURE__*/React.createElement("p", {
+    className: "max-w-4xl mx-auto mb-6 text-center text-xs text-gray-400"
+  }, quickRange === 'all' ? 'Totals cover every booked date.' : 'Totals cover the date range selected in the filters below.'), /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-3"
@@ -237,7 +307,7 @@ export var AdminDashboard = _ref => {
     name: "undo-2",
     size: 14
   }), " Reopen sheet")), isTeamLead && /*#__PURE__*/React.createElement("div", {
-    className: "max-w-4xl mx-auto mb-6 grid grid-cols-2 lg:grid-cols-3 gap-3"
+    className: "max-w-4xl mx-auto mb-6 grid grid-cols-2 gap-3"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: onRedistribute,
@@ -254,16 +324,30 @@ export var AdminDashboard = _ref => {
     size: 18
   }), "Change Requests", pendingChangeCount > 0 && /*#__PURE__*/React.createElement("span", {
     className: "bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5"
-  }, pendingChangeCount)), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: () => setAdminView('buses'),
-    className: "bg-white border-2 border-alorica-blue text-alorica-blue font-bold py-3 px-4 rounded-xl shadow hover:bg-alorica-light flex items-center justify-center gap-2 transition-all"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "settings",
-    size: 18
-  }), " Manage Buses")), /*#__PURE__*/React.createElement("div", {
+  }, pendingChangeCount))), /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto mb-6 bg-gray-50 border border-gray-100 rounded-2xl p-4"
   }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2 mb-3"
+  }, [{
+    key: 'today',
+    label: 'Today'
+  }, {
+    key: 'tomorrow',
+    label: 'Tomorrow'
+  }, {
+    key: 'week',
+    label: 'This week',
+    title: 'Today and the next 6 days'
+  }, {
+    key: 'all',
+    label: 'All dates'
+  }].map(range => /*#__PURE__*/React.createElement("button", {
+    key: range.key,
+    type: "button",
+    title: range.title || '',
+    onClick: () => applyQuickRange(range.key),
+    className: "text-xs font-semibold px-3 py-2 rounded-lg border transition-colors ".concat(quickRange === range.key ? 'bg-alorica-blue text-white border-alorica-blue' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100')
+  }, range.label))), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-1 sm:grid-cols-4 gap-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "sm:col-span-2"
@@ -313,12 +397,7 @@ export var AdminDashboard = _ref => {
     type: "button",
     onClick: resetFilters,
     className: "text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors"
-  }, "Clear filters"))), !isTeamLead && pendingReviewCount > 0 && /*#__PURE__*/React.createElement("p", {
-    className: "flex items-center gap-2 mt-3 text-xs font-semibold text-alorica-orange bg-orange-50 border border-orange-100 rounded-lg px-3 py-2"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "clock",
-    size: 14
-  }), pendingReviewCount, " booking", pendingReviewCount === 1 ? '' : 's', " waiting with the team leader \u2014 they will appear here once sent.")), sheetStatus === 'draft' ? /*#__PURE__*/React.createElement("div", {
+  }, "Clear filters")))), sheetStatus === 'draft' ? /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto mb-8"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
@@ -363,15 +442,7 @@ export var AdminDashboard = _ref => {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "message-circle",
     size: 14
-  }), " WhatsApp summary"), /*#__PURE__*/React.createElement("a", {
-    href: "https://t.me/share/url?url=".concat(encodeURIComponent('https://github.com/mhgd74/Alorica'), "&text=").concat(encodeURIComponent(summaryText())),
-    target: "_blank",
-    rel: "noopener noreferrer",
-    className: "text-xs font-semibold px-3 py-2 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors flex items-center gap-1"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "send",
-    size: 14
-  }), " Telegram summary"), /*#__PURE__*/React.createElement("button", {
+  }), " WhatsApp summary"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => {
       navigator.clipboard.writeText(summaryText()).then(() => pushToast('Summary copied to clipboard.', 'success')).catch(() => pushToast('Could not access the clipboard.', 'error'));
@@ -539,18 +610,9 @@ export var AdminDashboard = _ref => {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "plus",
     size: 20
-  }), " Add Bus"))), /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap items-center justify-between gap-3 mb-3"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "text-alorica-blue font-bold text-lg"
-  }, "Fleet (", buses.length, " buses)"), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: onRedistribute,
-    className: "text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "shuffle",
-    size: 14
-  }), " Auto-assign buses")), /*#__PURE__*/React.createElement("div", {
+  }), " Add Bus"))), /*#__PURE__*/React.createElement("h3", {
+    className: "text-alorica-blue font-bold text-lg mb-3"
+  }, "Fleet (", buses.length, " buses)"), /*#__PURE__*/React.createElement("div", {
     className: "border border-gray-100 rounded-2xl overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "overflow-x-auto"
@@ -611,8 +673,58 @@ export var AdminDashboard = _ref => {
   }, "Bookings on waitlist"))), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-400 mt-4 text-center"
   }, "Capacity is applied per day. Bookings that do not fit any bus are placed on the waitlist and flagged in red.")), adminView === 'users' && isAdmin && /*#__PURE__*/React.createElement("div", {
-    className: "max-w-3xl mx-auto"
+    className: "max-w-4xl mx-auto"
   }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4 text-center border border-blue-200"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-2 mb-1"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "users",
+    size: 20,
+    className: "text-alorica-blue"
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "text-3xl font-black text-alorica-blue"
+  }, allUsers.length)), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-600 font-semibold"
+  }, "Accounts")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-4 text-center border border-orange-200"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-2 mb-1"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "shield-check",
+    size: 20,
+    className: "text-alorica-orange"
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "text-3xl font-black text-alorica-orange"
+  }, teamLeadCount)), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-600 font-semibold"
+  }, "Team Leaders")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-gradient-to-br from-gray-50 to-gray-100 rounded-2xl p-4 text-center border border-gray-200"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-2 mb-1"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "user-cog",
+    size: 20,
+    className: "text-alorica-blue"
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "text-3xl font-black text-alorica-blue"
+  }, adminCount)), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-600 font-semibold"
+  }, "IT Admins")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-gradient-to-br from-amber-50 to-amber-100 rounded-2xl p-4 text-center border border-amber-200"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-2 mb-1"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "key-round",
+    size: 20,
+    className: "text-amber-600"
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "text-3xl font-black text-amber-600"
+  }, pendingSetupCount)), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-600 font-semibold"
+  }, "Temp Password"))), /*#__PURE__*/React.createElement("div", {
     className: "bg-alorica-light rounded-2xl p-6 mb-8"
   }, /*#__PURE__*/React.createElement("h3", {
     className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-4"
@@ -691,7 +803,9 @@ export var AdminDashboard = _ref => {
     value: "user"
   }, "Regular User"), /*#__PURE__*/React.createElement("option", {
     value: "teamlead"
-  }, "Team Leader")))), userFeedback.text && /*#__PURE__*/React.createElement("p", {
+  }, "Team Leader"), /*#__PURE__*/React.createElement("option", {
+    value: "admin"
+  }, "IT Admin")))), userFeedback.text && /*#__PURE__*/React.createElement("p", {
     className: "text-sm font-medium rounded-xl px-4 py-3 border fade-in ".concat(userFeedback.type === 'error' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-700 border-green-100')
   }, userFeedback.text), /*#__PURE__*/React.createElement("button", {
     type: "submit",
@@ -699,9 +813,26 @@ export var AdminDashboard = _ref => {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "user-plus",
     size: 20
-  }), " Create User"))), /*#__PURE__*/React.createElement("h3", {
-    className: "text-alorica-blue font-bold text-lg mb-3"
-  }, "Existing Users (", allUsers.length, ")"), /*#__PURE__*/React.createElement("div", {
+  }), " Create User"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "text-alorica-blue font-bold text-lg"
+  }, "Existing Users (", visibleUsers.length, visibleUsers.length !== allUsers.length ? " of ".concat(allUsers.length) : '', ")"), /*#__PURE__*/React.createElement("div", {
+    className: "relative"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "search",
+    size: 16
+  })), /*#__PURE__*/React.createElement("input", {
+    value: userQuery,
+    onChange: e => {
+      setUserQuery(e.target.value);
+      setUserPage(1);
+    },
+    placeholder: "Search name or username",
+    className: "w-full sm:w-64 pl-9 pr-3 py-2 border-2 border-gray-100 rounded-xl bg-white text-sm outline-none focus:border-alorica-blue"
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "border border-gray-100 rounded-2xl overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "overflow-x-auto"
@@ -716,8 +847,17 @@ export var AdminDashboard = _ref => {
   }, "Username"), /*#__PURE__*/React.createElement("th", {
     className: "text-left px-4 py-2 font-semibold"
   }, "Role"), /*#__PURE__*/React.createElement("th", {
+    className: "text-left px-4 py-2 font-semibold"
+  }, "Status"), /*#__PURE__*/React.createElement("th", {
+    className: "text-left px-4 py-2 font-semibold"
+  }, "Last sign-in"), /*#__PURE__*/React.createElement("th", {
     className: "text-center px-4 py-2 font-semibold"
-  }, "Remove"))), /*#__PURE__*/React.createElement("tbody", null, allUsers.map(u => /*#__PURE__*/React.createElement("tr", {
+  }, "Actions"))), /*#__PURE__*/React.createElement("tbody", null, pagedUsers.length === 0 && /*#__PURE__*/React.createElement("tr", {
+    className: "border-t border-gray-100"
+  }, /*#__PURE__*/React.createElement("td", {
+    colSpan: 6,
+    className: "px-4 py-6 text-center text-gray-400"
+  }, "No account matches \"", userQuery, "\".")), pagedUsers.map(u => /*#__PURE__*/React.createElement("tr", {
     key: u.username,
     className: "border-t border-gray-100"
   }, /*#__PURE__*/React.createElement("td", {
@@ -726,13 +866,42 @@ export var AdminDashboard = _ref => {
     className: "px-4 py-2 text-gray-600"
   }, u.username), /*#__PURE__*/React.createElement("td", {
     className: "px-4 py-2"
-  }, /*#__PURE__*/React.createElement("span", {
+  }, u.username === currentUser.username ? /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-semibold px-2 py-1 rounded-full ".concat(roleOf(u) === 'admin' ? 'bg-alorica-light text-alorica-blue' : roleOf(u) === 'teamlead' ? 'bg-orange-50 text-alorica-orange' : 'bg-gray-100 text-gray-600')
-  }, ROLE_LABELS[roleOf(u)])), /*#__PURE__*/React.createElement("td", {
-    className: "px-4 py-2 text-center"
+  }, ROLE_LABELS[roleOf(u)]) : /*#__PURE__*/React.createElement("select", {
+    value: roleOf(u),
+    onChange: e => onUpdateUserRole(u.username, e.target.value),
+    title: "Change the role of ".concat(u.username),
+    className: "text-xs font-semibold border-2 border-gray-100 rounded-lg px-2 py-1 bg-white text-gray-700 outline-none focus:border-alorica-blue cursor-pointer"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "user"
+  }, "User"), /*#__PURE__*/React.createElement("option", {
+    value: "teamlead"
+  }, "Team Leader"), /*#__PURE__*/React.createElement("option", {
+    value: "admin"
+  }, "IT Admin"))), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-2"
+  }, u.mustChangePassword ? /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-semibold px-2 py-1 rounded-full bg-amber-50 text-amber-700"
+  }, "Temp password") : /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-semibold px-2 py-1 rounded-full bg-green-50 text-green-700"
+  }, "Active")), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-2 text-xs text-gray-500"
+  }, u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '—'), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-1"
   }, u.username === currentUser.username ? /*#__PURE__*/React.createElement("span", {
     className: "text-xs text-gray-400"
-  }, "Signed in") : /*#__PURE__*/React.createElement("button", {
+  }, "Signed in") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onResetUserPassword(u.username),
+    className: "p-2 rounded-lg text-alorica-blue hover:bg-alorica-light transition-colors",
+    title: "Issue a new temporary password for ".concat(u.username)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "rotate-ccw",
+    size: 16
+  })), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => onDeleteUser(u.username),
     className: "p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors",
@@ -740,44 +909,29 @@ export var AdminDashboard = _ref => {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "trash-2",
     size: 16
-  }))))))))), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-400 mt-4 text-center"
-  }, "Pick \"Regular User\" for employees or \"Team Leader\" for reviewers. Team Leaders run the operation \u2014 they review bookings and leave, manage the fleet and print the sheet."), /*#__PURE__*/React.createElement("div", {
-    className: "mt-10 bg-gray-50 border border-gray-100 rounded-2xl p-6"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "database",
-    size: 20,
-    className: "text-alorica-orange"
-  }), " Data Backup & Restore"), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-500 mb-4"
-  }, "Download a JSON file with all bookings, buses and user accounts \u2014 or restore a previous backup."), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-1 sm:grid-cols-2 gap-3"
+  }))))))))))), userPageCount > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mt-4"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
-    onClick: onExportBackup,
-    className: "bg-white border-2 border-alorica-blue text-alorica-blue font-bold py-3 px-4 rounded-xl hover:bg-alorica-light flex items-center justify-center gap-2 transition-all"
+    disabled: safeUserPage <= 1,
+    onClick: () => setUserPage(safeUserPage - 1),
+    className: "flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-semibold text-alorica-blue bg-alorica-light disabled:opacity-40 disabled:cursor-not-allowed"
   }, /*#__PURE__*/React.createElement(Icon, {
-    name: "download",
-    size: 18
-  }), " Export backup"), /*#__PURE__*/React.createElement("label", {
-    className: "bg-white border-2 border-gray-200 text-gray-700 font-bold py-3 px-4 rounded-xl cursor-pointer hover:bg-gray-100 flex items-center justify-center gap-2 transition-all ".concat(importing ? 'opacity-70 cursor-wait' : '')
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "upload",
-    size: 18
-  }), " ", importing ? 'Restoring...' : 'Restore backup', /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: "application/json,.json",
-    className: "hidden",
-    onChange: e => {
-      var file = e.target.files && e.target.files[0];
-      e.target.value = '';
-      if (!file) return;
-      setImporting(true);
-      onImportBackup(file);
-    }
-  }))))), adminView === 'requests' && isAdmin && /*#__PURE__*/React.createElement("div", {
+    name: "chevron-left",
+    size: 16
+  }), " Previous"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs text-gray-500"
+  }, "Page ", safeUserPage, " of ", userPageCount), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    disabled: safeUserPage >= userPageCount,
+    onClick: () => setUserPage(safeUserPage + 1),
+    className: "flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-semibold text-alorica-blue bg-alorica-light disabled:opacity-40 disabled:cursor-not-allowed"
+  }, "Next ", /*#__PURE__*/React.createElement(Icon, {
+    name: "chevron-right",
+    size: 16
+  }))), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-400 mt-6 text-center"
+  }, "Pick \"Regular User\" for employees, \"Team Leader\" for the operation, or \"IT Admin\" for a second technical account. A temporary password must be replaced at the next sign-in.")), adminView === 'requests' && isAdmin && /*#__PURE__*/React.createElement("div", {
     className: "max-w-3xl mx-auto"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bg-alorica-light rounded-2xl p-6 mb-8"
@@ -952,6 +1106,7 @@ export var AdminDashboard = _ref => {
   }, "Review and approve or reject employee leave requests.")), /*#__PURE__*/React.createElement(VacationReview, {
     vacations: vacations,
     allUsers: [...DEFAULT_USERS, ...customUsers],
+    vacationBalances: vacationBalances,
     onApprove: onApproveVacation,
     onReject: onRejectVacation,
     currentUser: currentUser
@@ -973,7 +1128,7 @@ export var AdminDashboard = _ref => {
   }))), adminView === 'audit' && isAdmin && /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "bg-alorica-light rounded-2xl p-6 mb-8"
+    className: "bg-alorica-light rounded-2xl p-6 mb-6"
   }, /*#__PURE__*/React.createElement("h3", {
     className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2"
   }, /*#__PURE__*/React.createElement(Icon, {
@@ -982,11 +1137,42 @@ export var AdminDashboard = _ref => {
     className: "text-alorica-orange"
   }), " Activity log"), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-600"
-  }, "Every action recorded by the system, newest first. It is trimmed to the last 400 entries.")), auditLog.length === 0 ? /*#__PURE__*/React.createElement("p", {
+  }, "Every action recorded by the system, newest first. It is trimmed to the last 400 entries.")), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col sm:flex-row gap-3 mb-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "relative flex-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "search",
+    size: 16
+  })), /*#__PURE__*/React.createElement("input", {
+    value: auditQuery,
+    onChange: e => setAuditQuery(e.target.value),
+    placeholder: "Search by person, target or detail",
+    className: "w-full pl-9 pr-3 py-2 border-2 border-gray-100 rounded-xl bg-white text-sm outline-none focus:border-alorica-blue"
+  })), /*#__PURE__*/React.createElement("select", {
+    value: auditCategory,
+    onChange: e => setAuditCategory(e.target.value),
+    className: "px-3 py-2 border-2 border-gray-100 rounded-xl bg-white text-sm font-semibold text-gray-700 outline-none focus:border-alorica-blue"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "all"
+  }, "All activity"), auditGroups.map(group => /*#__PURE__*/React.createElement("option", {
+    key: group,
+    value: group
+  }, group))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: exportAudit,
+    disabled: visibleAudit.length === 0,
+    className: "flex items-center justify-center gap-2 px-4 py-2 rounded-xl border-2 border-alorica-blue text-alorica-blue font-bold text-sm hover:bg-alorica-light disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "download",
+    size: 16
+  }), " Export CSV")), visibleAudit.length === 0 ? /*#__PURE__*/React.createElement("p", {
     className: "text-center text-gray-400 py-8 text-sm"
-  }, "Nothing recorded yet.") : /*#__PURE__*/React.createElement("div", {
+  }, auditLog.length === 0 ? 'Nothing recorded yet.' : 'No entry matches this filter.') : /*#__PURE__*/React.createElement("div", {
     className: "border border-gray-100 rounded-2xl divide-y divide-gray-50 max-h-[36rem] overflow-y-auto"
-  }, [...auditLog].reverse().map(entry => /*#__PURE__*/React.createElement("div", {
+  }, visibleAudit.map(entry => /*#__PURE__*/React.createElement("div", {
     key: entry.id,
     className: "px-4 py-3 flex items-start gap-3"
   }, /*#__PURE__*/React.createElement("span", {
@@ -1006,5 +1192,7 @@ export var AdminDashboard = _ref => {
     className: "text-xs text-gray-500 mt-0.5"
   }, entry.details), /*#__PURE__*/React.createElement("p", {
     className: "text-[10px] text-gray-400 mt-1"
-  }, entry.actorName, " (", ROLE_LABELS[entry.actorRole] || entry.actorRole, ") \xB7 ", new Date(entry.at).toLocaleString()))))))));
+  }, entry.actorName, " (", ROLE_LABELS[entry.actorRole] || entry.actorRole, ") \xB7 ", new Date(entry.at).toLocaleString()))))), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-400 mt-3 text-center"
+  }, "Showing ", visibleAudit.length, " of ", auditLog.length, " entries."))));
 };

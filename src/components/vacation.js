@@ -247,11 +247,26 @@ export var VacationReview = _ref6 => {
   var {
     vacations,
     allUsers,
+    vacationBalances,
     onApprove,
     onReject,
     currentUser
   } = _ref6;
+  // Declining a request now asks for a reason, which is forwarded to the
+  // employee, so the open row and its draft are held here.
+  var [rejectingId, setRejectingId] = useState('');
+  var [rejectReason, setRejectReason] = useState('');
   var pendingVacations = vacations.filter(v => v.status === 'pending' && v.employeeId !== currentUser.username);
+
+  // The balance the team leader needs to see before approving: granting the
+  // request deducts these days, so the card shows what would be left.
+  var remainingFor = v => {
+    var balance = (vacationBalances || []).find(b => b.employeeId === v.employeeId) || freshVacationBalance(v.employeeId);
+    if (v.type === 'annual') return balance.annual - balance.usedAnnual;
+    if (v.type === 'sick') return balance.sick - balance.usedSick;
+    if (v.type === 'personal') return balance.personal - balance.usedPersonal;
+    return null;
+  };
   if (pendingVacations.length === 0) {
     return /*#__PURE__*/React.createElement("div", {
       className: "text-center py-10 bg-white rounded-2xl border-2 border-dashed border-gray-200"
@@ -267,6 +282,9 @@ export var VacationReview = _ref6 => {
     className: "space-y-4"
   }, pendingVacations.map(v => {
     var _VACATION_TYPES$v$typ6, _VACATION_TYPES$v$typ7, _VACATION_TYPES$v$typ8, _VACATION_TYPES$v$typ9, _VACATION_TYPES$v$typ10;
+    var label = ((_VACATION_TYPES$v$typ6 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ6 === void 0 ? void 0 : _VACATION_TYPES$v$typ6.label) || v.type;
+    var remaining = remainingFor(v);
+    var short = remaining != null && v.days > remaining;
     return /*#__PURE__*/React.createElement("div", {
       key: v.id,
       className: "bg-white rounded-2xl p-4 shadow-sm border border-gray-100"
@@ -275,7 +293,7 @@ export var VacationReview = _ref6 => {
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-4"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "w-12 h-12 rounded-xl flex items-center justify-center ".concat(((_VACATION_TYPES$v$typ6 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ6 === void 0 ? void 0 : _VACATION_TYPES$v$typ6.color) === 'green' ? 'bg-green-100 text-green-600' : ((_VACATION_TYPES$v$typ7 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ7 === void 0 ? void 0 : _VACATION_TYPES$v$typ7.color) === 'red' ? 'bg-red-100 text-red-600' : ((_VACATION_TYPES$v$typ8 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ8 === void 0 ? void 0 : _VACATION_TYPES$v$typ8.color) === 'blue' ? 'bg-blue-100 text-blue-600' : ((_VACATION_TYPES$v$typ9 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ9 === void 0 ? void 0 : _VACATION_TYPES$v$typ9.color) === 'orange' ? 'bg-orange-100 text-orange-600' : 'bg-gray-100 text-gray-600')
+      className: "w-12 h-12 rounded-xl flex items-center justify-center ".concat(((_VACATION_TYPES$v$typ7 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ7 === void 0 ? void 0 : _VACATION_TYPES$v$typ7.color) === 'green' ? 'bg-green-100 text-green-600' : ((_VACATION_TYPES$v$typ8 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ8 === void 0 ? void 0 : _VACATION_TYPES$v$typ8.color) === 'red' ? 'bg-red-100 text-red-600' : ((_VACATION_TYPES$v$typ9 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ9 === void 0 ? void 0 : _VACATION_TYPES$v$typ9.color) === 'blue' ? 'bg-blue-100 text-blue-600' : ((_VACATION_TYPES$v$typ10 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ10 === void 0 ? void 0 : _VACATION_TYPES$v$typ10.color) === 'orange' ? 'bg-orange-100 text-orange-600' : 'bg-gray-100 text-gray-600')
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "calendar",
       size: 24
@@ -283,21 +301,54 @@ export var VacationReview = _ref6 => {
       className: "font-bold text-alorica-blue"
     }, v.employeeName), /*#__PURE__*/React.createElement("p", {
       className: "text-xs text-gray-500"
-    }, ((_VACATION_TYPES$v$typ10 = VACATION_TYPES[v.type]) === null || _VACATION_TYPES$v$typ10 === void 0 ? void 0 : _VACATION_TYPES$v$typ10.label) || v.type), /*#__PURE__*/React.createElement("p", {
+    }, label), /*#__PURE__*/React.createElement("p", {
       className: "text-xs text-gray-500"
     }, v.startDate, " - ", v.endDate, " (", v.days, " day", v.days > 1 ? 's' : '', ")"))), /*#__PURE__*/React.createElement("div", {
       className: "flex gap-2"
     }, /*#__PURE__*/React.createElement("button", {
       onClick: () => onApprove(v.id),
       className: "px-4 py-2 rounded-lg bg-green-600 text-white font-semibold text-sm hover:bg-green-700 transition-colors"
-    }, "Approve"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => onReject(v.id),
+    }, "Approve"), rejectingId !== v.id && /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        setRejectingId(v.id);
+        setRejectReason('');
+      },
       className: "px-4 py-2 rounded-lg border border-red-200 text-red-600 font-semibold text-sm hover:bg-red-50 transition-colors"
-    }, "Reject"))), v.reason && /*#__PURE__*/React.createElement("p", {
+    }, "Reject"))), /*#__PURE__*/React.createElement("p", {
+      className: "text-xs mt-3 ".concat(short ? 'text-red-600 font-semibold' : 'text-gray-500')
+    }, remaining == null ? 'This leave type has no balance limit.' : short ? "Only ".concat(remaining, " day(s) of ").concat(label, " left, but ").concat(v.days, " requested.") : "Remaining ".concat(label, ": ").concat(remaining, " day(s) \u2014 ").concat(remaining - v.days, " left after this request.")), v.reason && /*#__PURE__*/React.createElement("p", {
       className: "text-sm text-gray-600 mt-3 pt-3 border-t border-gray-100"
     }, "Reason: ", v.reason), /*#__PURE__*/React.createElement("p", {
       className: "text-xs text-gray-400 mt-2"
-    }, "Requested: ", new Date(v.requestedAt).toLocaleString()));
+    }, "Requested: ", new Date(v.requestedAt).toLocaleString()), rejectingId === v.id && /*#__PURE__*/React.createElement("div", {
+      className: "mt-3 pt-3 border-t border-gray-100"
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "block text-xs font-semibold text-gray-600 mb-1"
+    }, "Reason for declining (sent to the employee)"), /*#__PURE__*/React.createElement("textarea", {
+      rows: 2,
+      value: rejectReason,
+      onChange: e => setRejectReason(e.target.value),
+      placeholder: "e.g. Cover is short on these dates",
+      className: "w-full px-3 py-2 border-2 border-gray-100 rounded-xl outline-none text-sm text-gray-800"
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "flex gap-2 mt-2"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      disabled: !rejectReason.trim(),
+      onClick: () => {
+        onReject(v.id, rejectReason.trim());
+        setRejectingId('');
+        setRejectReason('');
+      },
+      className: "px-4 py-2 rounded-lg text-white font-semibold text-sm transition-colors ".concat(rejectReason.trim() ? 'bg-red-600 hover:bg-red-700' : 'bg-red-300 cursor-not-allowed')
+    }, "Confirm decline"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => {
+        setRejectingId('');
+        setRejectReason('');
+      },
+      className: "px-4 py-2 rounded-lg border border-gray-200 text-gray-600 font-semibold text-sm hover:bg-gray-50 transition-colors"
+    }, "Cancel"))));
   }));
 };
 

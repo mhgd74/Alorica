@@ -348,18 +348,25 @@ export const App = () => {
     };
 
     // Styled replacement for window.confirm(); the action runs only on Confirm.
-    const requestConfirm = (message, onConfirm) => setConfirmRequest({ message, onConfirm });
+    // `onCancel` is for the callers that have to undo the state they set while
+    // they were preparing the question.
+    const requestConfirm = (message, onConfirm, onCancel = null) =>
+        setConfirmRequest({ message, onConfirm, onCancel });
 
     /* ------------------ audit trail ------------------
      * A short, append-only record of who changed what, so a booking
      * that moved can always be explained afterwards.
+     * `actor` is for the handlers that act on somebody who is not the
+     * signed-in user yet — a fresh sign-in records the account it just
+     * resolved, before `currentUser` holds it.
      */
-    const logAudit = (action, target, details = '') => {
+    const logAudit = (action, target, details = '', actor = null) => {
+        const who = actor || currentUser;
         setAuditLog((prev) => [...prev, {
             id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            actor: currentUser ? currentUser.username : 'system',
-            actorName: currentUser ? (currentUser.name || currentUser.username) : 'System',
-            actorRole: currentUser ? roleOf(currentUser) : 'system',
+            actor: who ? who.username : 'system',
+            actorName: who ? (who.name || who.username) : 'System',
+            actorRole: who ? roleOf(who) : 'system',
             action,
             target,
             details,
@@ -493,18 +500,23 @@ export const App = () => {
         // into a salted hash the first time its owner signs in.
         if (payload.legacy) {
             const upgraded = await withHashedPassword({ ...user, password });
-            if (isHashed(upgraded)) {
-                user = upgraded;
-                setCustomUsers((prev) => [...prev.filter((u) => u.username !== user.username), user]);
-                setRemovedUsers((prev) => prev.filter((u) => u !== user.username));
-            }
+            if (isHashed(upgraded)) user = upgraded;
         }
 
+        // The record is refreshed on every sign-in: it carries the account
+        // the server just authenticated, plus the sign-in date the admin
+        // table shows. The hash is left out on purpose — the server copies
+        // the stored one back before writing.
+        const account = { ...user, lastLoginAt: new Date().toISOString() };
+        setCustomUsers((prev) => [...prev.filter((u) => u.username !== account.username), account]);
+        setRemovedUsers((prev) => prev.filter((u) => u !== account.username));
+
         setIsLoggedIn(true);
-        setCurrentUser(user);
+        setCurrentUser(account);
         setError('');
         setLoginNotice('');
         setLoginData({ username: '', password: '' });
+        logAudit('auth.sign_in', account.username, `Signed in as ${ROLE_LABELS[roleOf(account)]}`, account);
     };
 
     /* ------------------ forgot password ------------------ */
@@ -532,6 +544,7 @@ export const App = () => {
                     resolvedBy: null
                 }
             ]);
+            logAudit('auth.password_requested', account.username, 'A reset was requested from the sign-in screen');
         }
 
         setError('');
@@ -573,6 +586,7 @@ export const App = () => {
         setCurrentUser(updated);
         setPwdForm({ next: '', confirm: '' });
         setPwdFeedback({ type: '', text: '' });
+        logAudit('user.password_change', updated.username, 'Password changed by the account owner', updated);
         pushToast('Your password has been updated.', 'success');
     };
 
@@ -588,6 +602,36 @@ export const App = () => {
         [changeRequests]
     );
 
+    // Issues a one-time password for an account and puts it in front of the
+    // admin exactly once — only the hash is kept afterwards. `requestId` is
+    // set when the admin is answering an employee's request, and left out
+    // when they start the reset themselves from the users table.
+    const issueTemporaryPassword = async (account, requestId) => {
+        const temporaryPassword = generateTempPassword();
+        const updated = await withHashedPassword({ ...account, password: temporaryPassword });
+        if (!isHashed(updated)) {
+            pushToast('A secure connection (https or localhost) is required for this action.', 'error');
+            return;
+        }
+        updated.mustChangePassword = true;
+        updated.tempPasswordExpiresAt = Date.now() + TEMP_PASSWORD_TTL;
+
+        setCustomUsers((prev) => [...prev.filter((u) => u.username !== updated.username), updated]);
+        setRemovedUsers((prev) => prev.filter((u) => u !== updated.username));
+        if (requestId) {
+            setPasswordRequests((prev) => prev.map((r) => (
+                r.id === requestId ? { ...r, status: 'resolved', resolvedAt: new Date().toISOString(), resolvedBy: currentUser.username } : r
+            )));
+        }
+        setTempPasswordReveal({
+            name: account.name,
+            username: account.username,
+            password: temporaryPassword,
+            expiresAt: updated.tempPasswordExpiresAt
+        });
+        logAudit('user.password_reset', account.username, 'Temporary password issued, valid for 24 hours');
+    };
+
     const handleResetPassword = async (requestId) => {
         const request = openRequests.find((r) => r.id === requestId);
         if (!request) return;
@@ -601,28 +645,57 @@ export const App = () => {
             return;
         }
 
-        const temporaryPassword = generateTempPassword();
-        const updated = await withHashedPassword({ ...account, password: temporaryPassword });
-        if (!isHashed(updated)) {
-            pushToast('A secure connection (https or localhost) is required for this action.', 'error');
+        await issueTemporaryPassword(account, requestId);
+    };
+
+    // The users table resets an account directly, without waiting for the
+    // employee to ask — the admin can see who is locked out.
+    const handleResetUserPassword = (username) => {
+        const account = allUsers.find((u) => u.username === username);
+        if (!account) return;
+        if (username === currentUser.username) {
+            pushToast('You cannot reset the password of the account you are signed in with.', 'error');
             return;
         }
-        updated.mustChangePassword = true;
-        updated.tempPasswordExpiresAt = Date.now() + TEMP_PASSWORD_TTL;
+        requestConfirm(
+            `Issue a new temporary password for "${account.name}" (${username})? The current password stops working immediately.`,
+            () => {
+                const request = openRequests.find((r) => r.username === username);
+                issueTemporaryPassword(account, request ? request.id : null);
+            }
+        );
+    };
 
-        setCustomUsers((prev) => [...prev.filter((u) => u.username !== updated.username), updated]);
-        setRemovedUsers((prev) => prev.filter((u) => u !== updated.username));
-        setPasswordRequests((prev) => prev.map((r) => (
-            r.id === requestId ? { ...r, status: 'resolved', resolvedAt: new Date().toISOString(), resolvedBy: currentUser.username } : r
-        )));
-        // Shown to the admin once; only the hash is kept afterwards.
-        setTempPasswordReveal({
-            name: account.name,
-            username: account.username,
-            password: temporaryPassword,
-            expiresAt: updated.tempPasswordExpiresAt
-        });
-        logAudit('user.password_reset', account.username, 'Temporary password issued, valid for 24 hours');
+    // Promoting or demoting an account never touches its password: the
+    // record keeps the hash the server holds.
+    const handleUpdateUserRole = (username, nextRole) => {
+        const account = allUsers.find((u) => u.username === username);
+        if (!account) return;
+
+        const currentRoleName = roleOf(account);
+        if (nextRole === currentRoleName) return;
+
+        if (username === currentUser.username) {
+            pushToast('You cannot change the role of the account you are signed in with.', 'error');
+            return;
+        }
+        // The console has to stay reachable: without an IT admin nobody can
+        // manage accounts or restore a backup.
+        if (currentRoleName === 'admin' && allUsers.filter((u) => roleOf(u) === 'admin').length <= 1) {
+            pushToast('This is the only IT admin account — promote another one first.', 'error');
+            return;
+        }
+
+        requestConfirm(
+            `Change "${account.name}" (${username}) from ${ROLE_LABELS[currentRoleName]} to ${ROLE_LABELS[nextRole]}?`,
+            () => {
+                const updated = { ...account, role: nextRole };
+                setCustomUsers((prev) => [...prev.filter((u) => u.username !== username), updated]);
+                setRemovedUsers((prev) => prev.filter((u) => u !== username));
+                logAudit('user.role_change', username, `${ROLE_LABELS[currentRoleName]} → ${ROLE_LABELS[nextRole]}`);
+                pushToast(`${username} is now ${ROLE_LABELS[nextRole]}.`, 'success');
+            }
+        );
     };
 
     const handleDismissRequest = (requestId) => {
@@ -645,7 +718,18 @@ export const App = () => {
         }
     };
 
-    const handleSignOut = () => {
+    const handleSignOut = async () => {
+        if (currentUser) logAudit('auth.sign_out', currentUser.username, 'Signed out');
+        // The audit entry above is queued by the effect that saves the log,
+        // which runs after this handler — so give it a tick and push it
+        // before the token is dropped, otherwise it would go with the rest
+        // of this session's queue. The push is capped, and never awaited
+        // forever: signing out must not wait on the network.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await Promise.race([
+            syncFlush().catch(() => {}),
+            new Promise((resolve) => setTimeout(resolve, 1500))
+        ]);
         setIsLoggedIn(false);
         setCurrentUser(null);
         setAdminView('bookings');
@@ -753,6 +837,21 @@ export const App = () => {
     // the dashboard and their own booking screen.
     const showDashboard = isAdmin || (isTeamLead && leaderMode === 'dashboard');
 
+    // One switcher covers all three places the header can lead to. For a team
+    // leader that is the dashboard plus the two personal screens; everyone else
+    // only has the personal ones.
+    const topView = !isTeamLead || leaderMode !== 'dashboard'
+        ? (meView === 'leave' ? 'leave' : 'transport')
+        : 'dashboard';
+    const setTopView = (view) => {
+        if (view === 'dashboard') {
+            setLeaderMode('dashboard');
+            return;
+        }
+        setLeaderMode('me');
+        setMeView(view);
+    };
+
     // A team leader holds the approval authority, so nothing of their own
     // needs signing off — it is applied directly and the others are told.
     const approvalRequired = (booking, next) => needsLeaderApproval(booking, next) && !isTeamLead;
@@ -767,15 +866,10 @@ export const App = () => {
         setSheetState([{ id: 'sheet', status, updatedAt: new Date().toISOString(), updatedBy: who }]);
     };
 
-    // The team leader reviews every booking; the IT admin never opens the
-    // sheet, so the "waiting to be sent" tally is only meaningful for them.
-    const reviewBookings = bookings;
-    const pendingReviewCount = 0;
-
     /* ------------------ team leader: bookings ------------------ */
     const filteredBookings = useMemo(() => {
         const q = filters.q.trim().toLowerCase();
-        return reviewBookings.filter((b) => {
+        return bookings.filter((b) => {
             const date = b.date || '';
             if (filters.from && date < filters.from) return false;
             if (filters.to && date > filters.to) return false;
@@ -783,7 +877,7 @@ export const App = () => {
             return [b.employeeName, b.employeeId, b.location, b.bus, b.type]
                 .some((v) => String(v == null ? '' : v).toLowerCase().includes(q));
         });
-    }, [reviewBookings, filters]);
+    }, [bookings, filters]);
 
     const dayGroups = useMemo(() => groupByDay(filteredBookings), [filteredBookings]);
     const busNames = buses.map((b) => b.name);
@@ -873,43 +967,53 @@ export const App = () => {
             pushToast('There are no bookings to print for the current filters.', 'error');
             return;
         }
-        const frame = document.createElement('iframe');
-        frame.setAttribute('aria-hidden', 'true');
-        frame.style.position = 'fixed';
-        frame.style.right = '0';
-        frame.style.bottom = '0';
-        frame.style.width = '0';
-        frame.style.height = '0';
-        frame.style.border = '0';
-        document.body.appendChild(frame);
 
-        const win = frame.contentWindow;
-        win.document.open();
-        win.document.write(buildPrintHtml(filteredBookings));
-        win.document.close();
+        // Printing is the team leader's final confirmation — the vendors order
+        // buses off this sheet and it is locked afterwards — so it is confirmed
+        // while the consequences can still be read.
+        const willLock = sheetStatus !== 'locked';
+        requestConfirm(
+            willLock
+                ? `Print ${filteredBookings.length} booking(s)? Printing locks the sheet, because the buses are ordered off it — it will need reopening before any further change.`
+                : `Print ${filteredBookings.length} booking(s)?`,
+            () => {
+                const frame = document.createElement('iframe');
+                frame.setAttribute('aria-hidden', 'true');
+                frame.style.position = 'fixed';
+                frame.style.right = '0';
+                frame.style.bottom = '0';
+                frame.style.width = '0';
+                frame.style.height = '0';
+                frame.style.border = '0';
+                document.body.appendChild(frame);
 
-        // Guarded cleanup: the frame can already be gone when the timers fire.
-        const dropFrame = () => {
-            if (frame.parentNode) frame.parentNode.removeChild(frame);
-        };
+                const win = frame.contentWindow;
+                win.document.open();
+                win.document.write(buildPrintHtml(filteredBookings));
+                win.document.close();
 
-        setTimeout(() => {
-            win.focus();
-            win.print();
-            setTimeout(dropFrame, 1500);
-        }, 300);
+                // Guarded cleanup: the frame can already be gone when the timers fire.
+                const dropFrame = () => {
+                    if (frame.parentNode) frame.parentNode.removeChild(frame);
+                };
 
-        // Printing is the team leader's final confirmation: the vendors are
-        // ordering buses off this sheet, so it is locked afterwards.
-        if (sheetStatus !== 'locked') {
-            setSheetStatus('locked');
-            logAudit('sheet.printed', `${filteredBookings.length} booking(s)`, `Printed and locked by ${currentUser.name || currentUser.username}`);
-            notifyLeaders(
-                'Sheet printed and locked',
-                `${currentUser.name || currentUser.username} printed the booking sheet. It is now locked — reopen it before making further changes.`,
-                { kind: 'info' }
-            );
-        }
+                setTimeout(() => {
+                    win.focus();
+                    win.print();
+                    setTimeout(dropFrame, 1500);
+                }, 300);
+
+                if (willLock) {
+                    setSheetStatus('locked');
+                    logAudit('sheet.printed', `${filteredBookings.length} booking(s)`, `Printed and locked by ${currentUser.name || currentUser.username}`);
+                    notifyLeaders(
+                        'Sheet printed and locked',
+                        `${currentUser.name || currentUser.username} printed the booking sheet. It is now locked — reopen it before making further changes.`,
+                        { kind: 'info' }
+                    );
+                }
+            }
+        );
     };
 
     /* ------------------ vacation management ------------------ */
@@ -970,85 +1074,97 @@ export const App = () => {
             return;
         }
 
-        // Update vacation status
-        const updatedVacations = vacations.map(v => 
-            v.id === id 
-                ? { 
-                    ...v, 
-                    status: 'approved', 
-                    decidedAt: new Date().toISOString(), 
-                    decidedBy: currentUser.username 
+        const label = VACATION_TYPES[vacation.type]?.label || vacation.type;
+        const who = vacation.employeeName || vacation.employeeId;
+
+        // Approving deducts the balance and can cancel the employee's own
+        // bookings inside the range, so it is confirmed first.
+        requestConfirm(
+            `Approve ${vacation.days} day(s) of ${label} for ${who} (${vacation.startDate} → ${vacation.endDate})?`
+                + (availableDays === Infinity ? '' : ` They will have ${availableDays - vacation.days} day(s) left.`)
+                + ' Any of their bookings inside those dates will be cancelled.',
+            () => {
+                // Update vacation status
+                const updatedVacations = vacations.map(v =>
+                    v.id === id
+                        ? {
+                            ...v,
+                            status: 'approved',
+                            decidedAt: new Date().toISOString(),
+                            decidedBy: currentUser.username
+                        }
+                        : v
+                );
+                setVacations(updatedVacations);
+
+                // Update balance. The record is replaced rather than mutated in
+                // place: the sync layer diffs the new collection against the copy
+                // it holds, and an object changed in place looks identical to it,
+                // so the deduction would never be queued for the server.
+                const existingBalance = vacationBalances.find(b => b.employeeId === vacation.employeeId);
+                const balance = existingBalance
+                    ? { ...existingBalance }
+                    : freshVacationBalance(vacation.employeeId);
+
+                if (vacation.type === 'annual') balance.usedAnnual += vacation.days;
+                else if (vacation.type === 'sick') balance.usedSick += vacation.days;
+                else if (vacation.type === 'personal') balance.usedPersonal += vacation.days;
+
+                setVacationBalances(existingBalance
+                    ? vacationBalances.map(b => (b.employeeId === vacation.employeeId ? balance : b))
+                    : [...vacationBalances, balance]);
+
+                // The employee is away on those dates, so their own bookings inside the
+                // range cannot stand any more — the seats go back to the pool.
+                let promoted = 0;
+                const clashing = bookings.filter(
+                    (b) => b.employeeId === vacation.employeeId
+                        && b.date >= vacation.startDate
+                        && b.date <= vacation.endDate
+                );
+
+                if (clashing.length) {
+                    const remaining = bookings.filter((b) => !clashing.includes(b));
+                    const next = redistribute(remaining, buses);
+                    promoted = countPromotions(remaining, next);
+                    setBookings(next);
+                    notifyBusChanges(remaining, next);
+
+                    notify(
+                        vacation.employeeId,
+                        'Bookings cancelled for your leave',
+                        `${clashing.length} booking(s) inside your approved leave (${vacation.startDate} to ${vacation.endDate}) were cancelled: ${clashing.map((b) => `${b.date} ${formatTime12h(b.time)}`).join(', ')}.`,
+                        { kind: 'info' }
+                    );
                 }
-                : v
-        );
-        setVacations(updatedVacations);
 
-        // Update balance. The record is replaced rather than mutated in
-        // place: the sync layer diffs the new collection against the copy
-        // it holds, and an object changed in place looks identical to it,
-        // so the deduction would never be queued for the server.
-        const existingBalance = vacationBalances.find(b => b.employeeId === vacation.employeeId);
-        const balance = existingBalance
-            ? { ...existingBalance }
-            : freshVacationBalance(vacation.employeeId);
+                logAudit(
+                    'vacation.approve',
+                    `${who} — ${vacation.startDate} → ${vacation.endDate}`,
+                    clashing.length
+                        ? `${clashing.length} conflicting booking(s) cancelled, ${promoted} waitlisted employee(s) promoted`
+                        : 'No conflicting bookings'
+                );
 
-        if (vacation.type === 'annual') balance.usedAnnual += vacation.days;
-        else if (vacation.type === 'sick') balance.usedSick += vacation.days;
-        else if (vacation.type === 'personal') balance.usedPersonal += vacation.days;
+                pushToast(
+                    clashing.length
+                        ? `Leave approved. ${clashing.length} conflicting booking(s) cancelled.`
+                        : 'Leave request approved.',
+                    'success'
+                );
 
-        setVacationBalances(existingBalance
-            ? vacationBalances.map(b => (b.employeeId === vacation.employeeId ? balance : b))
-            : [...vacationBalances, balance]);
-
-        // The employee is away on those dates, so their own bookings inside the
-        // range cannot stand any more — the seats go back to the pool.
-        let promoted = 0;
-        const clashing = bookings.filter(
-            (b) => b.employeeId === vacation.employeeId
-                && b.date >= vacation.startDate
-                && b.date <= vacation.endDate
-        );
-
-        if (clashing.length) {
-            const remaining = bookings.filter((b) => !clashing.includes(b));
-            const next = redistribute(remaining, buses);
-            promoted = countPromotions(remaining, next);
-            setBookings(next);
-            notifyBusChanges(remaining, next);
-
-            notify(
-                vacation.employeeId,
-                'Bookings cancelled for your leave',
-                `${clashing.length} booking(s) inside your approved leave (${vacation.startDate} to ${vacation.endDate}) were cancelled: ${clashing.map((b) => `${b.date} ${formatTime12h(b.time)}`).join(', ')}.`,
-                { kind: 'info' }
-            );
-        }
-
-        logAudit(
-            'vacation.approve',
-            `${vacation.employeeName || vacation.employeeId} — ${vacation.startDate} → ${vacation.endDate}`,
-            clashing.length
-                ? `${clashing.length} conflicting booking(s) cancelled, ${promoted} waitlisted employee(s) promoted`
-                : 'No conflicting bookings'
-        );
-
-        pushToast(
-            clashing.length
-                ? `Leave approved. ${clashing.length} conflicting booking(s) cancelled.`
-                : 'Leave request approved.',
-            'success'
-        );
-
-        // Notify employee
-        notify(
-            vacation.employeeId,
-            'Leave request approved',
-            `Your ${VACATION_TYPES[vacation.type]?.label || vacation.type} from ${vacation.startDate} to ${vacation.endDate} has been approved.`,
-            { kind: 'decision' }
+                // Notify employee
+                notify(
+                    vacation.employeeId,
+                    'Leave request approved',
+                    `Your ${label} from ${vacation.startDate} to ${vacation.endDate} has been approved.`,
+                    { kind: 'decision' }
+                );
+            }
         );
     };
 
-    const handleRejectVacation = (id) => {
+    const handleRejectVacation = (id, reason = '') => {
         const vacation = vacations.find(v => v.id === id);
         if (!vacation) return;
 
@@ -1058,18 +1174,26 @@ export const App = () => {
                     ...v, 
                     status: 'rejected', 
                     decidedAt: new Date().toISOString(), 
-                    decidedBy: currentUser.username 
+                    decidedBy: currentUser.username,
+                    decisionReason: reason || ''
                 }
                 : v
         );
         setVacations(updatedVacations);
         pushToast('Leave request rejected.', 'success');
 
-        // Notify employee
+        logAudit(
+            'vacation.reject',
+            `${vacation.employeeName || vacation.employeeId} — ${vacation.startDate} → ${vacation.endDate}`,
+            reason ? `Reason: ${reason}` : 'No reason given'
+        );
+
+        // Notify employee, carrying the reason the team leader gave.
         notify(
             vacation.employeeId,
             'Leave request declined',
-            `Your ${VACATION_TYPES[vacation.type]?.label || vacation.type} from ${vacation.startDate} to ${vacation.endDate} has been declined.`,
+            `Your ${VACATION_TYPES[vacation.type]?.label || vacation.type} from ${vacation.startDate} to ${vacation.endDate} has been declined.`
+                + (reason ? ` Reason: ${reason}` : ''),
             { kind: 'decision' }
         );
     };
@@ -1632,7 +1756,9 @@ export const App = () => {
             return;
         }
 
-        const role = newUser.role === 'teamlead' ? 'teamlead' : 'user';
+        // A second IT admin can be created here: if the only one is ever
+        // locked out there would be nobody left to manage the accounts.
+        const role = ['admin', 'teamlead'].includes(newUser.role) ? newUser.role : 'user';
         // Stored as a salted hash; the owner is asked to replace the temporary
         // password the first time they sign in.
         const created = await withHashedPassword({ name, username, password, role, mustChangePassword: true });
@@ -1668,6 +1794,8 @@ export const App = () => {
     };
 
     /* ------------------ admin: backup ------------------ */
+    // Everything the app keeps: accounts, bookings, leave and the audit
+    // trail. A backup that skipped a collection could not restore the app.
     const handleExportBackup = () => {
         const payload = {
             exportedAt: new Date().toISOString(),
@@ -1679,6 +1807,8 @@ export const App = () => {
             changeRequests,
             notifications,
             buses,
+            vacations,
+            vacationBalances,
             audit: auditLog,
             sheet: sheetState,
             settings
@@ -1692,6 +1822,7 @@ export const App = () => {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+        logAudit('backup.export', 'Full backup', 'A backup file was downloaded');
         pushToast('Backup file downloaded.', 'success');
     };
 
@@ -1699,25 +1830,52 @@ export const App = () => {
         if (!file) return;
         const reader = new FileReader();
         reader.onload = () => {
+            let data;
             try {
-                const data = JSON.parse(reader.result);
-                if (Array.isArray(data.bookings)) setBookings(data.bookings);
-                if (Array.isArray(data.customUsers)) setCustomUsers(data.customUsers);
-                if (Array.isArray(data.removedUsers)) setRemovedUsers(data.removedUsers);
-                if (Array.isArray(data.passwordRequests)) setPasswordRequests(data.passwordRequests);
-                if (Array.isArray(data.changeRequests)) setChangeRequests(data.changeRequests);
-                if (Array.isArray(data.notifications)) setNotifications(data.notifications);
-                if (Array.isArray(data.buses) && data.buses.length) setBuses(data.buses);
-                if (Array.isArray(data.audit)) setAuditLog(data.audit);
-                if (Array.isArray(data.sheet) && data.sheet.length) setSheetState(data.sheet);
-                if (data.settings) setSettings(normalizeSettingsList(data.settings));
-                logAudit('backup.restore', file.name, 'Backup file restored');
-                pushToast('Backup restored successfully.', 'success');
+                data = JSON.parse(reader.result);
             } catch (err) {
                 pushToast('That file is not a valid Alorica backup.', 'error');
-            } finally {
                 setImporting(false);
+                return;
             }
+
+            // Restoring writes over the shared data for everybody, so the
+            // admin is told what the file holds before anything is applied.
+            const described = [
+                ['bookings', 'bookings'],
+                ['customUsers', 'accounts'],
+                ['buses', 'buses'],
+                ['vacations', 'leave requests'],
+                ['passwordRequests', 'password requests'],
+                ['changeRequests', 'change requests'],
+                ['notifications', 'notifications'],
+                ['audit', 'log entries'],
+                ['settings', 'settings']
+            ]
+                .filter(([key]) => Array.isArray(data[key]))
+                .map(([key, label]) => `${data[key].length} ${label}`);
+
+            requestConfirm(
+                `Restore "${file.name}"? Everything currently stored is replaced with ${described.join(', ') || 'an empty set'}.`,
+                () => {
+                    if (Array.isArray(data.bookings)) setBookings(data.bookings);
+                    if (Array.isArray(data.customUsers)) setCustomUsers(data.customUsers);
+                    if (Array.isArray(data.removedUsers)) setRemovedUsers(data.removedUsers);
+                    if (Array.isArray(data.passwordRequests)) setPasswordRequests(data.passwordRequests);
+                    if (Array.isArray(data.changeRequests)) setChangeRequests(data.changeRequests);
+                    if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+                    if (Array.isArray(data.buses) && data.buses.length) setBuses(data.buses);
+                    if (Array.isArray(data.vacations)) setVacations(data.vacations);
+                    if (Array.isArray(data.vacationBalances)) setVacationBalances(normalizeVacationBalances(data.vacationBalances));
+                    if (Array.isArray(data.audit)) setAuditLog(data.audit);
+                    if (Array.isArray(data.sheet) && data.sheet.length) setSheetState(data.sheet);
+                    if (data.settings) setSettings(normalizeSettingsList(data.settings));
+                    logAudit('backup.restore', file.name, 'Backup file restored');
+                    pushToast('Backup restored successfully.', 'success');
+                    setImporting(false);
+                },
+                () => setImporting(false)
+            );
         };
         reader.onerror = () => {
             pushToast('Could not read the selected file.', 'error');
@@ -1870,7 +2028,11 @@ export const App = () => {
         {confirmRequest && (
             <ConfirmDialog
                 message={confirmRequest.message}
-                onCancel={() => setConfirmRequest(null)}
+                onCancel={() => {
+                    const cancel = confirmRequest.onCancel;
+                    setConfirmRequest(null);
+                    if (cancel) cancel();
+                }}
                 onConfirm={() => {
                     const action = confirmRequest.onConfirm;
                     setConfirmRequest(null);
@@ -1907,67 +2069,37 @@ export const App = () => {
         <div className="min-h-screen bg-alorica-light">
             <nav className="bg-white shadow-md px-3 sm:px-6 py-3 sm:py-4 flex flex-wrap justify-between items-center gap-y-3 sticky top-0 z-50">
                 <img src="logo.png" alt="Alorica" className="h-7 sm:h-8" />
-                {/* Transportation and My Leave are separate screens; on a narrow
-                    screen the switcher drops to its own full-width row. It is
-                    pointless while the dashboard is up, so it hides there. */}
-                {!showDashboard && (
+                {/* One switcher for every screen the header can lead to: the
+                    leader's dashboard plus the two personal screens. On a
+                    narrow screen it drops to its own full-width row. The IT
+                    admin has no such choice, so it is hidden for them. */}
+                {!isAdmin && (
                     <div className="order-last sm:order-none w-full sm:w-auto flex items-center bg-gray-100 rounded-full p-0.5">
-                        <button
-                            type="button"
-                            onClick={() => setMeView('transport')}
-                            className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${meView === 'transport' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
-                        >
-                            <Icon name="bus" size={14} />
-                            <span className="hidden sm:inline">Transportation</span>
-                            <span className="sm:hidden">Transport</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setMeView('leave')}
-                            className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${meView === 'leave' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
-                        >
-                            <Icon name="calendar" size={14} />
-                            My Leave
-                        </button>
+                        {(isTeamLead
+                            ? [
+                                { key: 'dashboard', label: 'Dashboard', short: 'Dash', icon: 'layout-dashboard' },
+                                { key: 'transport', label: 'Transportation', short: 'Transport', icon: 'bus' },
+                                { key: 'leave', label: 'My Leave', short: 'Leave', icon: 'calendar' }
+                            ]
+                            : [
+                                { key: 'transport', label: 'Transportation', short: 'Transport', icon: 'bus' },
+                                { key: 'leave', label: 'My Leave', short: 'Leave', icon: 'calendar' }
+                            ]
+                        ).map((view) => (
+                            <button
+                                key={view.key}
+                                type="button"
+                                onClick={() => setTopView(view.key)}
+                                className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${topView === view.key ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
+                            >
+                                <Icon name={view.icon} size={14} />
+                                <span className="hidden sm:inline">{view.label}</span>
+                                <span className="sm:hidden">{view.short}</span>
+                            </button>
+                        ))}
                     </div>
                 )}
                 <div className="flex items-center gap-2 sm:gap-4">
-                    {isTeamLead && (
-                        <div className="hidden sm:flex items-center bg-gray-100 rounded-full p-0.5">
-                            <button
-                                type="button"
-                                onClick={() => setLeaderMode('dashboard')}
-                                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${leaderMode === 'dashboard' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
-                            >
-                                Dashboard
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setLeaderMode('me')}
-                                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${leaderMode === 'me' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
-                            >
-                                My bookings
-                            </button>
-                        </div>
-                    )}
-                    {isTeamLead && (
-                        <div className="sm:hidden flex items-center bg-gray-100 rounded-full p-0.5">
-                            <button
-                                type="button"
-                                onClick={() => setLeaderMode('dashboard')}
-                                className={`px-2 py-1 rounded-full text-[10px] font-semibold transition-colors ${leaderMode === 'dashboard' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
-                            >
-                                Dashboard
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setLeaderMode('me')}
-                                className={`px-2 py-1 rounded-full text-[10px] font-semibold transition-colors ${leaderMode === 'me' ? 'bg-white text-alorica-blue shadow-sm' : 'text-gray-500 hover:text-alorica-blue'}`}
-                            >
-                                Me
-                            </button>
-                        </div>
-                    )}
                     <div className="text-right hidden sm:block">
                         <p className="text-sm font-bold text-alorica-blue">{currentUser.name}</p>
                         <p className="text-xs text-gray-500">{isAdmin ? 'IT Admin' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
@@ -2089,18 +2221,15 @@ export const App = () => {
                     setUserFeedback={setUserFeedback}
                     onCreateUser={handleCreateUser}
                     onDeleteUser={handleDeleteUser}
+                    onResetUserPassword={handleResetUserPassword}
+                    onUpdateUserRole={handleUpdateUserRole}
                     allUsers={allUsers}
                     currentUser={currentUser}
                     passwordRequests={passwordRequests}
                     onResetPassword={handleResetPassword}
                     onDismissRequest={handleDismissRequest}
-                    importing={importing}
-                    setImporting={setImporting}
-                    onExportBackup={handleExportBackup}
-                    onImportBackup={handleImportBackup}
                     role={currentRole}
                     onSubmitToAdmin={handleSubmitToAdmin}
-                    pendingReviewCount={pendingReviewCount}
                     sheetStatus={sheetStatus}
                     sheet={sheet}
                     onSendBack={handleSendBackToLeader}

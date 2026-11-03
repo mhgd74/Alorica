@@ -258,8 +258,23 @@ export const MyVacations = ({ vacations, currentUser, vacationBalances, onCancel
 
 
 // Vacation review for team leaders
-export const VacationReview = ({ vacations, allUsers, onApprove, onReject, currentUser }) => {
+export const VacationReview = ({ vacations, allUsers, vacationBalances, onApprove, onReject, currentUser }) => {
+    // Declining a request now asks for a reason, which is forwarded to the
+    // employee, so the open row and its draft are held here.
+    const [rejectingId, setRejectingId] = useState('');
+    const [rejectReason, setRejectReason] = useState('');
     const pendingVacations = vacations.filter(v => v.status === 'pending' && v.employeeId !== currentUser.username);
+
+    // The balance the team leader needs to see before approving: granting the
+    // request deducts these days, so the card shows what would be left.
+    const remainingFor = (v) => {
+        const balance = (vacationBalances || []).find(b => b.employeeId === v.employeeId)
+            || freshVacationBalance(v.employeeId);
+        if (v.type === 'annual') return balance.annual - balance.usedAnnual;
+        if (v.type === 'sick') return balance.sick - balance.usedSick;
+        if (v.type === 'personal') return balance.personal - balance.usedPersonal;
+        return null;
+    };
 
     if (pendingVacations.length === 0) {
         return (
@@ -272,7 +287,11 @@ export const VacationReview = ({ vacations, allUsers, onApprove, onReject, curre
 
     return (
         <div className="space-y-4">
-            {pendingVacations.map((v) => (
+            {pendingVacations.map((v) => {
+                const label = VACATION_TYPES[v.type]?.label || v.type;
+                const remaining = remainingFor(v);
+                const short = remaining != null && v.days > remaining;
+                return (
                 <div key={v.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
                     <div className="flex flex-wrap items-start justify-between gap-4">
                         <div className="flex items-center gap-4">
@@ -287,7 +306,7 @@ export const VacationReview = ({ vacations, allUsers, onApprove, onReject, curre
                             </div>
                             <div>
                                 <p className="font-bold text-alorica-blue">{v.employeeName}</p>
-                                <p className="text-xs text-gray-500">{VACATION_TYPES[v.type]?.label || v.type}</p>
+                                <p className="text-xs text-gray-500">{label}</p>
                                 <p className="text-xs text-gray-500">
                                     {v.startDate} - {v.endDate} ({v.days} day{v.days > 1 ? 's' : ''})
                                 </p>
@@ -301,14 +320,24 @@ export const VacationReview = ({ vacations, allUsers, onApprove, onReject, curre
                             >
                                 Approve
                             </button>
-                            <button
-                                onClick={() => onReject(v.id)}
-                                className="px-4 py-2 rounded-lg border border-red-200 text-red-600 font-semibold text-sm hover:bg-red-50 transition-colors"
-                            >
-                                Reject
-                            </button>
+                            {rejectingId !== v.id && (
+                                <button
+                                    onClick={() => { setRejectingId(v.id); setRejectReason(''); }}
+                                    className="px-4 py-2 rounded-lg border border-red-200 text-red-600 font-semibold text-sm hover:bg-red-50 transition-colors"
+                                >
+                                    Reject
+                                </button>
+                            )}
                         </div>
                     </div>
+
+                    <p className={`text-xs mt-3 ${short ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
+                        {remaining == null
+                            ? 'This leave type has no balance limit.'
+                            : short
+                                ? `Only ${remaining} day(s) of ${label} left, but ${v.days} requested.`
+                                : `Remaining ${label}: ${remaining} day(s) — ${remaining - v.days} left after this request.`}
+                    </p>
 
                     {v.reason && (
                         <p className="text-sm text-gray-600 mt-3 pt-3 border-t border-gray-100">
@@ -319,8 +348,45 @@ export const VacationReview = ({ vacations, allUsers, onApprove, onReject, curre
                     <p className="text-xs text-gray-400 mt-2">
                         Requested: {new Date(v.requestedAt).toLocaleString()}
                     </p>
+
+                    {rejectingId === v.id && (
+                        <div className="mt-3 pt-3 border-t border-gray-100">
+                            <label className="block text-xs font-semibold text-gray-600 mb-1">
+                                Reason for declining (sent to the employee)
+                            </label>
+                            <textarea
+                                rows={2}
+                                value={rejectReason}
+                                onChange={(e) => setRejectReason(e.target.value)}
+                                placeholder="e.g. Cover is short on these dates"
+                                className="w-full px-3 py-2 border-2 border-gray-100 rounded-xl outline-none text-sm text-gray-800"
+                            />
+                            <div className="flex gap-2 mt-2">
+                                <button
+                                    type="button"
+                                    disabled={!rejectReason.trim()}
+                                    onClick={() => {
+                                        onReject(v.id, rejectReason.trim());
+                                        setRejectingId('');
+                                        setRejectReason('');
+                                    }}
+                                    className={`px-4 py-2 rounded-lg text-white font-semibold text-sm transition-colors ${rejectReason.trim() ? 'bg-red-600 hover:bg-red-700' : 'bg-red-300 cursor-not-allowed'}`}
+                                >
+                                    Confirm decline
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setRejectingId(''); setRejectReason(''); }}
+                                    className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 font-semibold text-sm hover:bg-gray-50 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
-            ))}
+                );
+            })}
         </div>
     );
 };

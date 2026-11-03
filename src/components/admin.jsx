@@ -7,10 +7,14 @@ import { Icon } from './common.js';
 import { VacationReports, VacationReview } from './vacation.js';
 import { uniqueEmployeeCount } from '../lib/booking.js';
 import { CHANGE_REQUEST_TTL, DEFAULT_USERS, SHEET_STATUS, WAITLIST } from '../lib/config.js';
-import { changeValue, formatTime12h } from '../lib/format.js';
+import { changeValue, formatTime12h, todayISO } from '../lib/format.js';
 import { ROLE_LABELS, roleOf } from '../lib/roles.js';
 
 const { useState, useEffect, useMemo } = React;
+
+// The account table is paged rather than scrolled: a call centre can hold
+// far more accounts than fit on one screen.
+const USER_PAGE_SIZE = 10;
 
 
 
@@ -22,11 +26,11 @@ export const AdminDashboard = ({
     busNames, onSetBus, onDeleteBooking,
     buses, newBus, setNewBus, busFeedback, setBusFeedback,
     onAddBus, onDeleteBus, onUpdateCapacity, busUsage,
-    newUser, setNewUser, userFeedback, setUserFeedback, onCreateUser, onDeleteUser, allUsers, currentUser,
+    newUser, setNewUser, userFeedback, setUserFeedback, onCreateUser, onDeleteUser,
+    onResetUserPassword, onUpdateUserRole, allUsers, currentUser,
     passwordRequests, onResetPassword, onDismissRequest,
     pendingChanges, auditLog,
-    importing, setImporting, onExportBackup, onImportBackup,
-    role, onSubmitToAdmin, pendingReviewCount,
+    role, onSubmitToAdmin,
     sheetStatus, sheet, onSendBack, onOverrideRequest,
     pendingChangeCount,
     vacations, vacationBalances, customUsers,
@@ -34,6 +38,10 @@ export const AdminDashboard = ({
 }) => {
     const isTeamLead = role === 'teamlead';
     const isAdmin = role === 'admin';
+    const [userQuery, setUserQuery] = useState('');
+    const [userPage, setUserPage] = useState(1);
+    const [auditQuery, setAuditQuery] = useState('');
+    const [auditCategory, setAuditCategory] = useState('all');
     // A booking can only have one approval request open at a time.
     const pendingFor = (bookingId) => pendingChanges.find((r) => r.bookingId === bookingId && r.status === 'pending');
 
@@ -52,6 +60,101 @@ export const AdminDashboard = ({
         0,
         Math.ceil((CHANGE_REQUEST_TTL - (Date.now() - new Date(r.requestedAt).getTime())) / 3600000)
     );
+
+    /* ------------------ quick date ranges ------------------ */
+    // The sheet is normally printed for a single day, so the windows the team
+    // leader reaches for most often are one tap away instead of two pickers.
+    const isoShift = (days) => {
+        const d = new Date(todayISO());
+        d.setDate(d.getDate() + days);
+        return d.toISOString().slice(0, 10);
+    };
+
+    const quickRange = useMemo(() => {
+        const { from, to } = filters;
+        if (!from && !to) return 'all';
+        const today = todayISO();
+        if (from === today && to === today) return 'today';
+        const tomorrow = isoShift(1);
+        if (from === tomorrow && to === tomorrow) return 'tomorrow';
+        if (from === today && to === isoShift(6)) return 'week';
+        return 'custom';
+    }, [filters]);
+
+    const applyQuickRange = (key) => {
+        if (key === 'all') return setFilters({ ...filters, from: '', to: '' });
+        if (key === 'week') return setFilters({ ...filters, from: todayISO(), to: isoShift(6) });
+        const day = key === 'tomorrow' ? isoShift(1) : todayISO();
+        return setFilters({ ...filters, from: day, to: day });
+    };
+
+    // The waitlist figure in the statistics strip belongs to the range on
+    // screen; the fleet tab keeps the whole-fleet figure.
+    const filteredWaitlistCount = filteredBookings.filter((b) => !b.bus || b.bus === WAITLIST).length;
+
+    /* ------------------ account table ------------------ */
+    const adminCount = allUsers.filter((u) => roleOf(u) === 'admin').length;
+    const teamLeadCount = allUsers.filter((u) => roleOf(u) === 'teamlead').length;
+    const pendingSetupCount = allUsers.filter((u) => u.mustChangePassword).length;
+
+    const visibleUsers = useMemo(() => {
+        const needle = userQuery.trim().toLowerCase();
+        if (!needle) return allUsers;
+        return allUsers.filter((u) => `${u.name || ''} ${u.username || ''}`.toLowerCase().includes(needle));
+    }, [allUsers, userQuery]);
+
+    const userPageCount = Math.max(1, Math.ceil(visibleUsers.length / USER_PAGE_SIZE));
+    // The list shrinks under the current page when the search narrows it.
+    const safeUserPage = Math.min(userPage, userPageCount);
+    const pagedUsers = visibleUsers.slice(
+        (safeUserPage - 1) * USER_PAGE_SIZE,
+        safeUserPage * USER_PAGE_SIZE
+    );
+
+    /* ------------------ activity log ------------------ */
+    // The part before the dot groups the actions ("user.create" → "user").
+    const auditGroups = useMemo(() => {
+        const groups = new Set();
+        auditLog.forEach((entry) => groups.add(String(entry.action || '').split('.')[0]));
+        groups.delete('');
+        return [...groups].sort();
+    }, [auditLog]);
+
+    const visibleAudit = useMemo(() => {
+        const needle = auditQuery.trim().toLowerCase();
+        return [...auditLog].reverse().filter((entry) => {
+            if (auditCategory !== 'all' && String(entry.action || '').split('.')[0] !== auditCategory) return false;
+            if (!needle) return true;
+            return [entry.action, entry.target, entry.details, entry.actorName, entry.actor]
+                .some((value) => String(value || '').toLowerCase().includes(needle));
+        });
+    }, [auditLog, auditQuery, auditCategory]);
+
+    const exportAudit = () => {
+        const quote = (value) => `"${String(value == null ? '' : value).replace(/"/g, '""')}"`;
+        const rows = [['When', 'Actor', 'Role', 'Action', 'Target', 'Details']].concat(
+            visibleAudit.map((entry) => [
+                new Date(entry.at).toLocaleString(),
+                entry.actorName || entry.actor || '',
+                ROLE_LABELS[entry.actorRole] || entry.actorRole || '',
+                entry.action || '',
+                entry.target || '',
+                entry.details || ''
+            ])
+        );
+        const csv = rows.map((row) => row.map(quote).join(',')).join('\r\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Alorica_activity_${new Date().toISOString().slice(0, 10)}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        pushToast('Activity log exported.', 'success');
+    };
+
     return (
     <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-white">
         <div className="bg-alorica-blue p-6 sm:p-8 text-white text-center">
@@ -91,60 +194,41 @@ export const AdminDashboard = ({
         {adminView === 'bookings' && isTeamLead && (
             <>
             {/* Team Leader Quick Stats */}
-            {isTeamLead && (
-                <div className="max-w-4xl mx-auto mb-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4 text-center border border-blue-200">
-                        <div className="flex items-center justify-center gap-2 mb-1">
-                            <Icon name="calendar-check" size={20} className="text-alorica-blue" />
-                            <p className="text-3xl font-black text-alorica-blue">{filteredBookings.length}</p>
-                        </div>
-                        <p className="text-xs text-gray-600 font-semibold">Total Bookings</p>
-                    </div>
-                    <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-2xl p-4 text-center border border-green-200">
-                        <div className="flex items-center justify-center gap-2 mb-1">
-                            <Icon name="users" size={20} className="text-green-700" />
-                            <p className="text-3xl font-black text-green-700">{uniqueEmployeeCount(filteredBookings)}</p>
-                        </div>
-                        <p className="text-xs text-gray-600 font-semibold">Employees</p>
-                    </div>
-                    <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-4 text-center border border-orange-200">
-                        <div className="flex items-center justify-center gap-2 mb-1">
-                            <Icon name="bus" size={20} className="text-alorica-orange" />
-                            <p className="text-3xl font-black text-alorica-orange">{buses.length}</p>
-                        </div>
-                        <p className="text-xs text-gray-600 font-semibold">Available Buses</p>
-                    </div>
-                    <div className={`rounded-2xl p-4 text-center border ${waitlistCount > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200'}`}>
-                        <div className="flex items-center justify-center gap-2 mb-1">
-                            <Icon name="clock" size={20} className={waitlistCount > 0 ? 'text-red-600' : 'text-gray-600'} />
-                            <p className={`text-3xl font-black ${waitlistCount > 0 ? 'text-red-600' : 'text-gray-600'}`}>{waitlistCount}</p>
-                        </div>
-                        <p className="text-xs text-gray-600 font-semibold">On Waitlist</p>
-                    </div>
-                </div>
-            )}
-
-            {/* Admin Quick Stats */}
-            {!isTeamLead && (
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 max-w-4xl mx-auto">
-                    <div className="bg-alorica-light rounded-2xl p-4 text-center">
+            <div className="max-w-4xl mx-auto mb-2 grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4 text-center border border-blue-200">
+                    <div className="flex items-center justify-center gap-2 mb-1">
+                        <Icon name="calendar-check" size={20} className="text-alorica-blue" />
                         <p className="text-3xl font-black text-alorica-blue">{filteredBookings.length}</p>
-                        <p className="text-xs text-gray-500 mt-1">Bookings</p>
                     </div>
-                    <div className="bg-alorica-light rounded-2xl p-4 text-center">
-                        <p className="text-3xl font-black text-alorica-blue">{dayGroups.length}</p>
-                        <p className="text-xs text-gray-500 mt-1">Days</p>
-                    </div>
-                    <div className="bg-alorica-light rounded-2xl p-4 text-center">
-                        <p className="text-3xl font-black text-alorica-blue">{uniqueEmployeeCount(filteredBookings)}</p>
-                        <p className="text-xs text-gray-500 mt-1">Employees</p>
-                    </div>
-                    <div className="bg-alorica-light rounded-2xl p-4 text-center">
-                        <p className={`text-3xl font-black ${waitlistCount ? 'text-red-600' : 'text-alorica-blue'}`}>{waitlistCount}</p>
-                        <p className="text-xs text-gray-500 mt-1">On waitlist</p>
-                    </div>
+                    <p className="text-xs text-gray-600 font-semibold">Total Bookings</p>
                 </div>
-            )}
+                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-2xl p-4 text-center border border-green-200">
+                    <div className="flex items-center justify-center gap-2 mb-1">
+                        <Icon name="users" size={20} className="text-green-700" />
+                        <p className="text-3xl font-black text-green-700">{uniqueEmployeeCount(filteredBookings)}</p>
+                    </div>
+                    <p className="text-xs text-gray-600 font-semibold">Employees</p>
+                </div>
+                <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-4 text-center border border-orange-200">
+                    <div className="flex items-center justify-center gap-2 mb-1">
+                        <Icon name="bus" size={20} className="text-alorica-orange" />
+                        <p className="text-3xl font-black text-alorica-orange">{buses.length}</p>
+                    </div>
+                    <p className="text-xs text-gray-600 font-semibold">Available Buses</p>
+                </div>
+                <div className={`rounded-2xl p-4 text-center border ${filteredWaitlistCount > 0 ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-200' : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200'}`}>
+                    <div className="flex items-center justify-center gap-2 mb-1">
+                        <Icon name="clock" size={20} className={filteredWaitlistCount > 0 ? 'text-red-600' : 'text-gray-600'} />
+                        <p className={`text-3xl font-black ${filteredWaitlistCount > 0 ? 'text-red-600' : 'text-gray-600'}`}>{filteredWaitlistCount}</p>
+                    </div>
+                    <p className="text-xs text-gray-600 font-semibold">On Waitlist</p>
+                </div>
+            </div>
+            <p className="max-w-4xl mx-auto mb-6 text-center text-xs text-gray-400">
+                {quickRange === 'all'
+                    ? 'Totals cover every booked date.'
+                    : 'Totals cover the date range selected in the filters below.'}
+            </p>
 
             {/* Sheet Status */}
             <div className="max-w-4xl mx-auto mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3">
@@ -178,7 +262,7 @@ export const AdminDashboard = ({
 
             {/* Team Leader Quick Actions */}
             {isTeamLead && (
-                <div className="max-w-4xl mx-auto mb-6 grid grid-cols-2 lg:grid-cols-3 gap-3">
+                <div className="max-w-4xl mx-auto mb-6 grid grid-cols-2 gap-3">
                     <button
                         type="button"
                         onClick={onRedistribute}
@@ -197,18 +281,35 @@ export const AdminDashboard = ({
                             <span className="bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5">{pendingChangeCount}</span>
                         )}
                     </button>
-                    <button
-                        type="button"
-                        onClick={() => setAdminView('buses')}
-                        className="bg-white border-2 border-alorica-blue text-alorica-blue font-bold py-3 px-4 rounded-xl shadow hover:bg-alorica-light flex items-center justify-center gap-2 transition-all"
-                    >
-                        <Icon name="settings" size={18} /> Manage Buses
-                    </button>
                 </div>
             )}
 
             {/* Filters */}
             <div className="max-w-4xl mx-auto mb-6 bg-gray-50 border border-gray-100 rounded-2xl p-4">
+                {/* Quick windows: each one fills the same from/to fields the
+                    date pickers use, so a manual pick still reads as "Custom". */}
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                    {[
+                        { key: 'today', label: 'Today' },
+                        { key: 'tomorrow', label: 'Tomorrow' },
+                        { key: 'week', label: 'This week', title: 'Today and the next 6 days' },
+                        { key: 'all', label: 'All dates' }
+                    ].map((range) => (
+                        <button
+                            key={range.key}
+                            type="button"
+                            title={range.title || ''}
+                            onClick={() => applyQuickRange(range.key)}
+                            className={`text-xs font-semibold px-3 py-2 rounded-lg border transition-colors ${
+                                quickRange === range.key
+                                    ? 'bg-alorica-blue text-white border-alorica-blue'
+                                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'
+                            }`}
+                        >
+                            {range.label}
+                        </button>
+                    ))}
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                     <div className="sm:col-span-2">
                         <label className="block text-xs font-semibold text-gray-600 mb-1">Search</label>
@@ -259,13 +360,6 @@ export const AdminDashboard = ({
                         )}
                     </div>
                 </div>
-
-                {!isTeamLead && pendingReviewCount > 0 && (
-                    <p className="flex items-center gap-2 mt-3 text-xs font-semibold text-alorica-orange bg-orange-50 border border-orange-100 rounded-lg px-3 py-2">
-                        <Icon name="clock" size={14} />
-                        {pendingReviewCount} booking{pendingReviewCount === 1 ? '' : 's'} waiting with the team leader — they will appear here once sent.
-                    </p>
-                )}
             </div>
 
             {sheetStatus === 'draft' ? (
@@ -316,14 +410,6 @@ export const AdminDashboard = ({
                         className="text-xs font-semibold px-3 py-2 rounded-lg bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors flex items-center gap-1"
                     >
                         <Icon name="message-circle" size={14} /> WhatsApp summary
-                    </a>
-                    <a
-                        href={`https://t.me/share/url?url=${encodeURIComponent('https://github.com/mhgd74/Alorica')}&text=${encodeURIComponent(summaryText())}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors flex items-center gap-1"
-                    >
-                        <Icon name="send" size={14} /> Telegram summary
                     </a>
                     <button
                         type="button"
@@ -504,16 +590,7 @@ export const AdminDashboard = ({
                     </form>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-                    <h3 className="text-alorica-blue font-bold text-lg">Fleet ({buses.length} buses)</h3>
-                    <button
-                        type="button"
-                        onClick={onRedistribute}
-                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
-                    >
-                        <Icon name="shuffle" size={14} /> Auto-assign buses
-                    </button>
-                </div>
+                <h3 className="text-alorica-blue font-bold text-lg mb-3">Fleet ({buses.length} buses)</h3>
 
                 <div className="border border-gray-100 rounded-2xl overflow-hidden">
                     <div className="overflow-x-auto">
@@ -578,7 +655,39 @@ export const AdminDashboard = ({
 
         {/* ================= USERS ================= */}
         {adminView === 'users' && isAdmin && (
-            <div className="max-w-3xl mx-auto">
+            <div className="max-w-4xl mx-auto">
+                {/* Who is in the system, at a glance */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                    <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4 text-center border border-blue-200">
+                        <div className="flex items-center justify-center gap-2 mb-1">
+                            <Icon name="users" size={20} className="text-alorica-blue" />
+                            <p className="text-3xl font-black text-alorica-blue">{allUsers.length}</p>
+                        </div>
+                        <p className="text-xs text-gray-600 font-semibold">Accounts</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-4 text-center border border-orange-200">
+                        <div className="flex items-center justify-center gap-2 mb-1">
+                            <Icon name="shield-check" size={20} className="text-alorica-orange" />
+                            <p className="text-3xl font-black text-alorica-orange">{teamLeadCount}</p>
+                        </div>
+                        <p className="text-xs text-gray-600 font-semibold">Team Leaders</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-2xl p-4 text-center border border-gray-200">
+                        <div className="flex items-center justify-center gap-2 mb-1">
+                            <Icon name="user-cog" size={20} className="text-alorica-blue" />
+                            <p className="text-3xl font-black text-alorica-blue">{adminCount}</p>
+                        </div>
+                        <p className="text-xs text-gray-600 font-semibold">IT Admins</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-2xl p-4 text-center border border-amber-200">
+                        <div className="flex items-center justify-center gap-2 mb-1">
+                            <Icon name="key-round" size={20} className="text-amber-600" />
+                            <p className="text-3xl font-black text-amber-600">{pendingSetupCount}</p>
+                        </div>
+                        <p className="text-xs text-gray-600 font-semibold">Temp Password</p>
+                    </div>
+                </div>
+
                 <div className="bg-alorica-light rounded-2xl p-6 mb-8">
                     <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-4">
                         <Icon name="user-plus" size={20} className="text-alorica-orange" /> Create New User
@@ -624,6 +733,7 @@ export const AdminDashboard = ({
                                 >
                                     <option value="user">Regular User</option>
                                     <option value="teamlead">Team Leader</option>
+                                    <option value="admin">IT Admin</option>
                                 </select>
                             </div>
                         </div>
@@ -647,7 +757,23 @@ export const AdminDashboard = ({
                     </form>
                 </div>
 
-                <h3 className="text-alorica-blue font-bold text-lg mb-3">Existing Users ({allUsers.length})</h3>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+                    <h3 className="text-alorica-blue font-bold text-lg">
+                        Existing Users ({visibleUsers.length}{visibleUsers.length !== allUsers.length ? ` of ${allUsers.length}` : ''})
+                    </h3>
+                    <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                            <Icon name="search" size={16} />
+                        </span>
+                        <input
+                            value={userQuery}
+                            onChange={(e) => { setUserQuery(e.target.value); setUserPage(1); }}
+                            placeholder="Search name or username"
+                            className="w-full sm:w-64 pl-9 pr-3 py-2 border-2 border-gray-100 rounded-xl bg-white text-sm outline-none focus:border-alorica-blue"
+                        />
+                    </div>
+                </div>
+
                 <div className="border border-gray-100 rounded-2xl overflow-hidden">
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
@@ -656,36 +782,80 @@ export const AdminDashboard = ({
                                     <th className="text-left px-4 py-2 font-semibold">Full Name</th>
                                     <th className="text-left px-4 py-2 font-semibold">Username</th>
                                     <th className="text-left px-4 py-2 font-semibold">Role</th>
-                                    <th className="text-center px-4 py-2 font-semibold">Remove</th>
+                                    <th className="text-left px-4 py-2 font-semibold">Status</th>
+                                    <th className="text-left px-4 py-2 font-semibold">Last sign-in</th>
+                                    <th className="text-center px-4 py-2 font-semibold">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {allUsers.map((u) => (
+                                {pagedUsers.length === 0 && (
+                                    <tr className="border-t border-gray-100">
+                                        <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
+                                            No account matches "{userQuery}".
+                                        </td>
+                                    </tr>
+                                )}
+                                {pagedUsers.map((u) => (
                                     <tr key={u.username} className="border-t border-gray-100">
                                         <td className="px-4 py-2 text-gray-800">{u.name}</td>
                                         <td className="px-4 py-2 text-gray-600">{u.username}</td>
                                         <td className="px-4 py-2">
-                                            <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
-                                                roleOf(u) === 'admin' ? 'bg-alorica-light text-alorica-blue'
-                                                    : roleOf(u) === 'teamlead' ? 'bg-orange-50 text-alorica-orange'
-                                                    : 'bg-gray-100 text-gray-600'
-                                            }`}>
-                                                {ROLE_LABELS[roleOf(u)]}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-2 text-center">
                                             {u.username === currentUser.username ? (
-                                                <span className="text-xs text-gray-400">Signed in</span>
+                                                <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
+                                                    roleOf(u) === 'admin' ? 'bg-alorica-light text-alorica-blue'
+                                                        : roleOf(u) === 'teamlead' ? 'bg-orange-50 text-alorica-orange'
+                                                        : 'bg-gray-100 text-gray-600'
+                                                }`}>
+                                                    {ROLE_LABELS[roleOf(u)]}
+                                                </span>
                                             ) : (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onDeleteUser(u.username)}
-                                                    className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
-                                                    title={`Delete ${u.username}`}
+                                                <select
+                                                    value={roleOf(u)}
+                                                    onChange={(e) => onUpdateUserRole(u.username, e.target.value)}
+                                                    title={`Change the role of ${u.username}`}
+                                                    className="text-xs font-semibold border-2 border-gray-100 rounded-lg px-2 py-1 bg-white text-gray-700 outline-none focus:border-alorica-blue cursor-pointer"
                                                 >
-                                                    <Icon name="trash-2" size={16} />
-                                                </button>
+                                                    <option value="user">User</option>
+                                                    <option value="teamlead">Team Leader</option>
+                                                    <option value="admin">IT Admin</option>
+                                                </select>
                                             )}
+                                        </td>
+                                        <td className="px-4 py-2">
+                                            {u.mustChangePassword ? (
+                                                <span className="text-xs font-semibold px-2 py-1 rounded-full bg-amber-50 text-amber-700">Temp password</span>
+                                            ) : (
+                                                <span className="text-xs font-semibold px-2 py-1 rounded-full bg-green-50 text-green-700">Active</span>
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-2 text-xs text-gray-500">
+                                            {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '—'}
+                                        </td>
+                                        <td className="px-4 py-2">
+                                            <div className="flex items-center justify-center gap-1">
+                                                {u.username === currentUser.username ? (
+                                                    <span className="text-xs text-gray-400">Signed in</span>
+                                                ) : (
+                                                    <>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onResetUserPassword(u.username)}
+                                                            className="p-2 rounded-lg text-alorica-blue hover:bg-alorica-light transition-colors"
+                                                            title={`Issue a new temporary password for ${u.username}`}
+                                                        >
+                                                            <Icon name="rotate-ccw" size={16} />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onDeleteUser(u.username)}
+                                                            className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
+                                                            title={`Delete ${u.username}`}
+                                                        >
+                                                            <Icon name="trash-2" size={16} />
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -693,42 +863,33 @@ export const AdminDashboard = ({
                         </table>
                     </div>
                 </div>
-                <p className="text-xs text-gray-400 mt-4 text-center">
-                    Pick "Regular User" for employees or "Team Leader" for reviewers. Team Leaders run the operation — they review bookings and leave, manage the fleet and print the sheet.
-                </p>
 
-                <div className="mt-10 bg-gray-50 border border-gray-100 rounded-2xl p-6">
-                    <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
-                        <Icon name="database" size={20} className="text-alorica-orange" /> Data Backup &amp; Restore
-                    </h3>
-                    <p className="text-xs text-gray-500 mb-4">
-                        Download a JSON file with all bookings, buses and user accounts — or restore a previous backup.
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {userPageCount > 1 && (
+                    <div className="flex items-center justify-between mt-4">
                         <button
                             type="button"
-                            onClick={onExportBackup}
-                            className="bg-white border-2 border-alorica-blue text-alorica-blue font-bold py-3 px-4 rounded-xl hover:bg-alorica-light flex items-center justify-center gap-2 transition-all"
+                            disabled={safeUserPage <= 1}
+                            onClick={() => setUserPage(safeUserPage - 1)}
+                            className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-semibold text-alorica-blue bg-alorica-light disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                            <Icon name="download" size={18} /> Export backup
+                            <Icon name="chevron-left" size={16} /> Previous
                         </button>
-                        <label className={`bg-white border-2 border-gray-200 text-gray-700 font-bold py-3 px-4 rounded-xl cursor-pointer hover:bg-gray-100 flex items-center justify-center gap-2 transition-all ${importing ? 'opacity-70 cursor-wait' : ''}`}>
-                            <Icon name="upload" size={18} /> {importing ? 'Restoring...' : 'Restore backup'}
-                            <input
-                                type="file"
-                                accept="application/json,.json"
-                                className="hidden"
-                                onChange={(e) => {
-                                    const file = e.target.files && e.target.files[0];
-                                    e.target.value = '';
-                                    if (!file) return;
-                                    setImporting(true);
-                                    onImportBackup(file);
-                                }}
-                            />
-                        </label>
+                        <span className="text-xs text-gray-500">Page {safeUserPage} of {userPageCount}</span>
+                        <button
+                            type="button"
+                            disabled={safeUserPage >= userPageCount}
+                            onClick={() => setUserPage(safeUserPage + 1)}
+                            className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-semibold text-alorica-blue bg-alorica-light disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            Next <Icon name="chevron-right" size={16} />
+                        </button>
                     </div>
-                </div>
+                )}
+
+                <p className="text-xs text-gray-400 mt-6 text-center">
+                    Pick "Regular User" for employees, "Team Leader" for the operation, or "IT Admin" for a second
+                    technical account. A temporary password must be replaced at the next sign-in.
+                </p>
             </div>
         )}
 
@@ -933,6 +1094,7 @@ export const AdminDashboard = ({
                     <VacationReview
                         vacations={vacations}
                         allUsers={[...DEFAULT_USERS, ...customUsers]}
+                        vacationBalances={vacationBalances}
                         onApprove={onApproveVacation}
                         onReject={onRejectVacation}
                         currentUser={currentUser}
@@ -961,7 +1123,7 @@ export const AdminDashboard = ({
         {/* ================= AUDIT LOG ================= */}
         {adminView === 'audit' && isAdmin && (
             <div className="max-w-4xl mx-auto">
-                <div className="bg-alorica-light rounded-2xl p-6 mb-8">
+                <div className="bg-alorica-light rounded-2xl p-6 mb-6">
                     <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
                         <Icon name="history" size={20} className="text-alorica-orange" /> Activity log
                     </h3>
@@ -969,11 +1131,46 @@ export const AdminDashboard = ({
                         Every action recorded by the system, newest first. It is trimmed to the last 400 entries.
                     </p>
                 </div>
-                {auditLog.length === 0 ? (
-                    <p className="text-center text-gray-400 py-8 text-sm">Nothing recorded yet.</p>
+
+                <div className="flex flex-col sm:flex-row gap-3 mb-4">
+                    <div className="relative flex-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                            <Icon name="search" size={16} />
+                        </span>
+                        <input
+                            value={auditQuery}
+                            onChange={(e) => setAuditQuery(e.target.value)}
+                            placeholder="Search by person, target or detail"
+                            className="w-full pl-9 pr-3 py-2 border-2 border-gray-100 rounded-xl bg-white text-sm outline-none focus:border-alorica-blue"
+                        />
+                    </div>
+                    <select
+                        value={auditCategory}
+                        onChange={(e) => setAuditCategory(e.target.value)}
+                        className="px-3 py-2 border-2 border-gray-100 rounded-xl bg-white text-sm font-semibold text-gray-700 outline-none focus:border-alorica-blue"
+                    >
+                        <option value="all">All activity</option>
+                        {auditGroups.map((group) => (
+                            <option key={group} value={group}>{group}</option>
+                        ))}
+                    </select>
+                    <button
+                        type="button"
+                        onClick={exportAudit}
+                        disabled={visibleAudit.length === 0}
+                        className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl border-2 border-alorica-blue text-alorica-blue font-bold text-sm hover:bg-alorica-light disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                    >
+                        <Icon name="download" size={16} /> Export CSV
+                    </button>
+                </div>
+
+                {visibleAudit.length === 0 ? (
+                    <p className="text-center text-gray-400 py-8 text-sm">
+                        {auditLog.length === 0 ? 'Nothing recorded yet.' : 'No entry matches this filter.'}
+                    </p>
                 ) : (
                     <div className="border border-gray-100 rounded-2xl divide-y divide-gray-50 max-h-[36rem] overflow-y-auto">
-                        {[...auditLog].reverse().map((entry) => (
+                        {visibleAudit.map((entry) => (
                             <div key={entry.id} className="px-4 py-3 flex items-start gap-3">
                                 <span className="mt-0.5 shrink-0 text-alorica-orange">
                                     <Icon name="dot" size={18} />
@@ -992,6 +1189,10 @@ export const AdminDashboard = ({
                         ))}
                     </div>
                 )}
+
+                <p className="text-xs text-gray-400 mt-3 text-center">
+                    Showing {visibleAudit.length} of {auditLog.length} entries.
+                </p>
             </div>
         )}
 
