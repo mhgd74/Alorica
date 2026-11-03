@@ -746,16 +746,16 @@ export const App = () => {
         if (isLoggedIn) setActiveTab(LIVE_PREFERENCES.defaultTab);
     }, [isLoggedIn]);
 
-    // The admin always runs the dashboard; a team leader chooses between it
-    // and their own booking screen.
+    // An IT admin always runs their console; a team leader chooses between
+    // the dashboard and their own booking screen.
     const showDashboard = isAdmin || (isTeamLead && leaderMode === 'dashboard');
 
     // A team leader holds the approval authority, so nothing of their own
     // needs signing off — it is applied directly and the others are told.
     const approvalRequired = (booking, next) => needsLeaderApproval(booking, next) && !isTeamLead;
 
-    // Where the sheet stands: draft, sent to the admin, or locked once the
-    // admin has printed it and the buses have been ordered from the vendor.
+    // Where the sheet stands: draft, marked ready to print, or locked once
+    // the team leader has printed it and the buses have been ordered.
     const sheet = sheetState[0] || { status: 'draft' };
     const sheetStatus = SHEET_STATUS[sheet.status] ? sheet.status : 'draft';
     const sheetLocked = sheetStatus === 'locked';
@@ -764,14 +764,12 @@ export const App = () => {
         setSheetState([{ id: 'sheet', status, updatedAt: new Date().toISOString(), updatedBy: who }]);
     };
 
-    // A booking only reaches the admin after a team leader has forwarded it.
-    const reviewBookings = useMemo(
-        () => (isTeamLead ? bookings : bookings.filter((b) => b.submittedAt)),
-        [bookings, isTeamLead]
-    );
-    const pendingReviewCount = isTeamLead ? 0 : bookings.length - reviewBookings.length;
+    // The team leader reviews every booking; the IT admin never opens the
+    // sheet, so the "waiting to be sent" tally is only meaningful for them.
+    const reviewBookings = bookings;
+    const pendingReviewCount = 0;
 
-    /* ------------------ admin: bookings ------------------ */
+    /* ------------------ team leader: bookings ------------------ */
     const filteredBookings = useMemo(() => {
         const q = filters.q.trim().toLowerCase();
         return reviewBookings.filter((b) => {
@@ -898,14 +896,14 @@ export const App = () => {
             setTimeout(dropFrame, 1500);
         }, 300);
 
-        // Printing is the admin's final confirmation: the vendors are
+        // Printing is the team leader's final confirmation: the vendors are
         // ordering buses off this sheet, so it is locked afterwards.
         if (sheetStatus !== 'locked') {
             setSheetStatus('locked');
             logAudit('sheet.printed', `${filteredBookings.length} booking(s)`, `Printed and locked by ${currentUser.name || currentUser.username}`);
             notifyLeaders(
                 'Sheet printed and locked',
-                `${currentUser.name || currentUser.username} (Admin) printed the booking sheet. It is now locked — ask the admin to send it back before making further changes.`,
+                `${currentUser.name || currentUser.username} printed the booking sheet. It is now locked — reopen it before making further changes.`,
                 { kind: 'info' }
             );
         }
@@ -1288,7 +1286,7 @@ export const App = () => {
     );
 
     const createChangeRequest = (booking, kind, changes, summary) => {
-        // Managing bookings is the team leader's job; the admin only prints and exports.
+        // Managing bookings is the team leader's job; the admin does not touch them.
         if (!isTeamLead) {
             pushToast('Only a team leader can request booking changes.', 'error');
             return;
@@ -1530,12 +1528,12 @@ export const App = () => {
 
     const resetFilters = () => setFilters({ q: '', from: '', to: '' });
 
-    /* ------------------ team leader: forward bookings to the admin ------------------ */
+    /* ------------------ team leader: mark the sheet ready to print ------------------ */
     const handleSubmitToAdmin = () => {
-        // Once the admin has printed the sheet the buses are already
-        // ordered, so it cannot be replaced until it is sent back.
+        // Once the sheet has been printed the buses are already ordered, so
+        // it cannot be replaced until it is reopened.
         if (sheetLocked) {
-            pushToast('This sheet was printed and locked. Ask the admin to send it back before sending again.', 'error');
+            pushToast('This sheet was printed and locked. Reopen it before marking it ready again.', 'error');
             return;
         }
         if (!filteredBookings.length) {
@@ -1550,23 +1548,24 @@ export const App = () => {
             ids.has(b.id) ? { ...b, submittedBy, submittedAt } : b
         )));
         setSheetStatus('sent');
-        logAudit('bookings.send_to_admin', `${ids.size} booking(s)`, `Sent by ${submittedBy}`);
-        pushToast(`${ids.size} booking(s) sent to the admin for final confirmation.`, 'success');
+        logAudit('bookings.sheet_ready', `${ids.size} booking(s)`, `Marked ready to print by ${submittedBy}`);
+        pushToast(`${ids.size} booking(s) marked as ready to print.`, 'success');
     };
 
-    // The admin hands the sheet back so the team leader can work on it again.
+    // Reopening lets the team leader work on a sheet that was already sent
+    // or printed.
     const handleSendBackToLeader = () => {
         setSheetStatus('draft');
-        logAudit('sheet.send_back', 'Booking sheet', `Sent back to the team leader by ${currentUser.name || currentUser.username}`);
+        logAudit('sheet.reopen', 'Booking sheet', `Reopened for changes by ${currentUser.name || currentUser.username}`);
         notifyLeaders(
-            'Sheet sent back',
-            `${currentUser.name || currentUser.username} (Admin) sent the booking sheet back for changes. You can edit and send it again.`,
+            'Sheet reopened',
+            `${currentUser.name || currentUser.username} reopened the booking sheet for changes. It can be edited and marked ready again.`,
             { kind: 'info' }
         );
-        pushToast('The sheet was sent back to the team leader.', 'success');
+        pushToast('The sheet was reopened for changes.', 'success');
     };
 
-    /* ------------------ admin: buses ------------------ */
+    /* ------------------ team leader: buses ------------------ */
     const handleAddBus = (e) => {
         e.preventDefault();
         const name = newBus.name.trim();
@@ -1769,17 +1768,29 @@ export const App = () => {
 
     const filtersActive = Boolean(filters.q || filters.from || filters.to);
     const pendingVacationCount = vacations.filter(v => v.status === 'pending').length;
-    // Team leaders only get the bookings view; fleet and user management stay with the admin.
+    // Team leaders run the operation — reviewing bookings, the fleet and the
+    // sheet. The IT admin owns the accounts, the password requests and the
+    // audit trail, and takes no part in the day-to-day running.
     const adminTabs = [
-        { key: 'bookings', label: isTeamLead ? 'Review Bookings' : 'Bookings', icon: 'calendar-check' },
-        { key: 'changes', label: 'Change Requests', icon: 'git-pull-request', badge: pendingChangeCount },
-        { key: 'vacations', label: isTeamLead ? 'Review Leave' : 'Leave Reports', icon: 'calendar', badge: isTeamLead ? pendingVacationCount : 0 },
+        ...(isTeamLead ? [
+            { key: 'bookings', label: 'Review Bookings', icon: 'calendar-check' },
+            { key: 'changes', label: 'Change Requests', icon: 'git-pull-request', badge: pendingChangeCount },
+            { key: 'vacations', label: 'Review Leave', icon: 'calendar', badge: pendingVacationCount },
+            { key: 'buses', label: 'Buses', icon: 'bus' }
+        ] : []),
         ...(isAdmin ? [
-            { key: 'buses', label: 'Buses', icon: 'bus' },
             { key: 'users', label: 'Users', icon: 'users' },
-            { key: 'requests', label: 'Password Requests', icon: 'key-round', badge: openRequests.length }
+            { key: 'requests', label: 'Password Requests', icon: 'key-round', badge: openRequests.length },
+            { key: 'audit', label: 'Audit Log', icon: 'history' }
         ] : [])
     ];
+
+    // The two dashboards have no tabs in common, so land each role on one
+    // of its own instead of leaving the previous role's tab selected.
+    useEffect(() => {
+        if (!isLoggedIn) return;
+        setAdminView(isTeamLead ? 'bookings' : 'users');
+    }, [isLoggedIn, isTeamLead]);
 
     /* ------------------ login screen ------------------ */
     if (!isLoggedIn) {
@@ -1835,7 +1846,6 @@ export const App = () => {
                 onClose={() => setSettingsSection(null)}
                 currentUser={currentUser}
                 role={currentRole}
-                isAdmin={isAdmin}
                 preferences={preferences}
                 onPreferences={handleUpdatePreferences}
                 settings={appSettings}
@@ -1933,7 +1943,7 @@ export const App = () => {
                     )}
                     <div className="text-right hidden sm:block">
                         <p className="text-sm font-bold text-alorica-blue">{currentUser.name}</p>
-                        <p className="text-xs text-gray-500">{isAdmin ? 'Administrator' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
+                        <p className="text-xs text-gray-500">{isAdmin ? 'IT Admin' : isTeamLead ? 'Team Leader' : 'Welcome back'}</p>
                     </div>
                     <span
                         title={syncOnline
@@ -1970,7 +1980,7 @@ export const App = () => {
                                         { key: 'account', label: 'Profile & password', icon: 'user' },
                                         { key: 'notifications', label: 'Notifications', icon: 'bell' },
                                         { key: 'data', label: 'Sync & data', icon: 'database' },
-                                        ...(isAdmin ? [
+                                        ...(isTeamLead ? [
                                             { key: 'shifts', label: 'Shift times', icon: 'clock' },
                                             { key: 'leave', label: 'Leave defaults', icon: 'calendar' },
                                             { key: 'rules', label: 'Booking rules', icon: 'bus' }
@@ -1986,7 +1996,7 @@ export const App = () => {
                                             {item.label}
                                         </button>
                                     ))}
-                                    {isAdmin && (
+                                    {isTeamLead && (
                                         <button
                                             type="button"
                                             onClick={() => { setSettingsOpen(false); setSettingsSection(null); setAdminView('buses'); }}

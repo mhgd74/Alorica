@@ -1,5 +1,6 @@
 /*
- * The admin and team-lead dashboard: the fleet, the sheet and the day-to-day overview.
+ * The dashboard, split by role: the team leader gets the operation (fleet,
+ * sheet, bookings and leave), the IT admin gets the accounts and the audit log.
  */
 
 import { Icon } from './common.js';
@@ -54,11 +55,11 @@ export const AdminDashboard = ({
     return (
     <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-white">
         <div className="bg-alorica-blue p-6 sm:p-8 text-white text-center">
-            <h2 className="text-2xl sm:text-3xl font-bold mb-2">{isTeamLead ? 'Team Leader Dashboard' : 'Admin Dashboard'}</h2>
+            <h2 className="text-2xl sm:text-3xl font-bold mb-2">{isTeamLead ? 'Team Leader Dashboard' : 'IT Admin Console'}</h2>
             <p className="opacity-80">
                 {isTeamLead
-                    ? 'Adjust the bus distribution and send the sheet to the admin — changes need the employee\'s approval'
-                    : 'Print and share the final sheet, manage the bus fleet and user accounts'}
+                    ? 'Run the operation: review bookings and leave, adjust the bus distribution, then print and lock the sheet'
+                    : 'Manage the accounts, the password requests and the audit trail'}
             </p>
         </div>
 
@@ -87,7 +88,7 @@ export const AdminDashboard = ({
         <div className="p-4 sm:p-8">
 
         {/* ================= BOOKINGS ================= */}
-        {adminView === 'bookings' && (
+        {adminView === 'bookings' && isTeamLead && (
             <>
             {/* Team Leader Quick Stats */}
             {isTeamLead && (
@@ -159,18 +160,18 @@ export const AdminDashboard = ({
                         <p className="text-[11px] text-gray-500 mt-0.5">
                             {sheet.updatedAt
                                 ? `Last updated ${new Date(sheet.updatedAt).toLocaleString()}${sheet.updatedBy ? ` by ${sheet.updatedBy}` : ''}`
-                                : 'Not sent to the admin yet.'}
-                            {sheetStatus === 'locked' && ' — the admin printed it, so the buses are already ordered.'}
+                                : 'Not marked ready to print yet.'}
+                            {sheetStatus === 'locked' && ' — it has been printed, so the buses are already ordered.'}
                         </p>
                     </div>
                 </div>
-                {isAdmin && (sheetStatus === 'sent' || sheetStatus === 'locked') && (
+                {isTeamLead && (sheetStatus === 'sent' || sheetStatus === 'locked') && (
                     <button
                         type="button"
                         onClick={onSendBack}
                         className="shrink-0 text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
                     >
-                        <Icon name="undo-2" size={14} /> Send back to team leader
+                        <Icon name="undo-2" size={14} /> Reopen sheet
                     </button>
                 )}
             </div>
@@ -267,20 +268,17 @@ export const AdminDashboard = ({
                 )}
             </div>
 
-            {isTeamLead ? (
+            {sheetStatus === 'draft' ? (
                 <div className="max-w-4xl mx-auto mb-8">
                     <button
                         type="button"
                         onClick={onSubmitToAdmin}
-                        disabled={sheetStatus === 'locked'}
-                        className={`w-full font-bold py-4 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all ${sheetStatus === 'locked' ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-alorica-orange hover:shadow-2xl text-white'}`}
+                        className="w-full font-bold py-4 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all bg-alorica-orange hover:shadow-2xl text-white"
                     >
-                        <Icon name="send" size={20} /> Send to Admin
+                        <Icon name="send" size={20} /> Mark ready to print
                     </button>
                     <p className="text-center text-xs text-gray-400 mt-2">
-                        {sheetStatus === 'locked'
-                            ? 'The admin printed this sheet and the buses are already ordered. Ask the admin to send it back before sending again.'
-                            : 'Marks the bookings above as reviewed and sends them to the admin for final confirmation.'}
+                        Marks the bookings above as reviewed and moves the sheet to "Ready to print".
                     </p>
                 </div>
             ) : (
@@ -341,7 +339,7 @@ export const AdminDashboard = ({
                 </div>
 
                 <p className="text-center text-xs text-gray-400 mb-8">
-                    The Excel file contains a Summary sheet plus one sheet per day with employee name, ID, booking time, pickup point, type and assigned bus.
+                    Printing locks the sheet — the buses are ordered off it. The Excel file contains a Summary sheet plus one sheet per day with employee name, ID, booking time, pickup point, type and assigned bus.
                 </p>
                 </>
             )}
@@ -417,7 +415,7 @@ export const AdminDashboard = ({
                                                     <span
                                                         title={b.submittedAt
                                                             ? `Sent by ${b.submittedBy || 'Team Leader'} — ${new Date(b.submittedAt).toLocaleString()}`
-                                                            : 'Not sent to the admin yet'}
+                                                            : 'Not marked ready to print yet'}
                                                         className={`text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap ${b.submittedAt ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}
                                                     >
                                                         {b.submittedAt ? 'Sent' : 'Pending'}
@@ -455,7 +453,7 @@ export const AdminDashboard = ({
         )}
 
         {/* ================= BUSES ================= */}
-        {adminView === 'buses' && (
+        {adminView === 'buses' && isTeamLead && (
             <div className="max-w-4xl mx-auto">
                 <div className="bg-alorica-light rounded-2xl p-6 mb-8">
                     <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-4">
@@ -579,7 +577,7 @@ export const AdminDashboard = ({
         )}
 
         {/* ================= USERS ================= */}
-        {adminView === 'users' && (
+        {adminView === 'users' && isAdmin && (
             <div className="max-w-3xl mx-auto">
                 <div className="bg-alorica-light rounded-2xl p-6 mb-8">
                     <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-4">
@@ -696,7 +694,7 @@ export const AdminDashboard = ({
                     </div>
                 </div>
                 <p className="text-xs text-gray-400 mt-4 text-center">
-                    Pick "Regular User" for employees or "Team Leader" for reviewers. Team Leaders can review, edit and forward bookings but cannot export or print the sheet. Accounts are saved in this browser.
+                    Pick "Regular User" for employees or "Team Leader" for reviewers. Team Leaders run the operation — they review bookings and leave, manage the fleet and print the sheet.
                 </p>
 
                 <div className="mt-10 bg-gray-50 border border-gray-100 rounded-2xl p-6">
@@ -735,7 +733,7 @@ export const AdminDashboard = ({
         )}
 
         {/* ================= PASSWORD REQUESTS ================= */}
-        {adminView === 'requests' && (
+        {adminView === 'requests' && isAdmin && (
             <div className="max-w-3xl mx-auto">
                 <div className="bg-alorica-light rounded-2xl p-6 mb-8">
                     <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
@@ -817,14 +815,14 @@ export const AdminDashboard = ({
                 )}
 
                 <p className="text-xs text-gray-400 mt-4 text-center">
-                    The request is stored on the server, so the admin and the team leader both see it.
+                    The request is stored on the server, so the IT admin sees it from any device.
                     The employee is not emailed — pass the temporary password to them yourself.
                 </p>
             </div>
         )}
 
         {/* ================= CHANGE REQUESTS ================= */}
-        {adminView === 'changes' && (
+        {adminView === 'changes' && isTeamLead && (
             <div className="max-w-4xl mx-auto space-y-10">
                 <div className="bg-alorica-light rounded-2xl p-6">
                     <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
@@ -917,43 +915,13 @@ export const AdminDashboard = ({
                         </div>
                     </div>
                 )}
-
-                <div>
-                    <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-3">
-                        <Icon name="history" size={20} className="text-alorica-orange" /> Activity log
-                    </h3>
-                    {auditLog.length === 0 ? (
-                        <p className="text-center text-gray-400 py-8 text-sm">Nothing recorded yet.</p>
-                    ) : (
-                        <div className="border border-gray-100 rounded-2xl divide-y divide-gray-50 max-h-[32rem] overflow-y-auto">
-                            {[...auditLog].reverse().map((entry) => (
-                                <div key={entry.id} className="px-4 py-3 flex items-start gap-3">
-                                    <span className="mt-0.5 shrink-0 text-alorica-orange">
-                                        <Icon name="dot" size={18} />
-                                    </span>
-                                    <div className="min-w-0 flex-1">
-                                        <p className="text-sm text-alorica-blue font-semibold">
-                                            {entry.action} <span className="text-gray-400 font-normal">·</span>{' '}
-                                            <span className="font-medium text-gray-700">{entry.target}</span>
-                                        </p>
-                                        {entry.details && <p className="text-xs text-gray-500 mt-0.5">{entry.details}</p>}
-                                        <p className="text-[10px] text-gray-400 mt-1">
-                                            {entry.actorName} ({ROLE_LABELS[entry.actorRole] || entry.actorRole}) · {new Date(entry.at).toLocaleString()}
-                                        </p>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
             </div>
         )}
 
         {/* ================= VACATIONS ================= */}
-        {adminView === 'vacations' && (
-            <>
-            {isTeamLead ? (
-                <div className="max-w-4xl mx-auto">
+        {adminView === 'vacations' && isTeamLead && (
+            <div className="max-w-4xl mx-auto space-y-10">
+                <div>
                     <div className="bg-alorica-light rounded-2xl p-6 mb-8">
                         <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
                             <Icon name="calendar-check" size={20} className="text-alorica-orange" /> Pending Leave Requests
@@ -970,8 +938,8 @@ export const AdminDashboard = ({
                         currentUser={currentUser}
                     />
                 </div>
-            ) : (
-                <div className="max-w-4xl mx-auto">
+
+                <div>
                     <div className="bg-alorica-light rounded-2xl p-6 mb-8">
                         <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
                             <Icon name="bar-chart-2" size={20} className="text-alorica-orange" /> Leave Reports
@@ -987,8 +955,44 @@ export const AdminDashboard = ({
                         onExportExcel={onExportVacationExcel}
                     />
                 </div>
-            )}
-            </>
+            </div>
+        )}
+
+        {/* ================= AUDIT LOG ================= */}
+        {adminView === 'audit' && isAdmin && (
+            <div className="max-w-4xl mx-auto">
+                <div className="bg-alorica-light rounded-2xl p-6 mb-8">
+                    <h3 className="flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2">
+                        <Icon name="history" size={20} className="text-alorica-orange" /> Activity log
+                    </h3>
+                    <p className="text-xs text-gray-600">
+                        Every action recorded by the system, newest first. It is trimmed to the last 400 entries.
+                    </p>
+                </div>
+                {auditLog.length === 0 ? (
+                    <p className="text-center text-gray-400 py-8 text-sm">Nothing recorded yet.</p>
+                ) : (
+                    <div className="border border-gray-100 rounded-2xl divide-y divide-gray-50 max-h-[36rem] overflow-y-auto">
+                        {[...auditLog].reverse().map((entry) => (
+                            <div key={entry.id} className="px-4 py-3 flex items-start gap-3">
+                                <span className="mt-0.5 shrink-0 text-alorica-orange">
+                                    <Icon name="dot" size={18} />
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm text-alorica-blue font-semibold">
+                                        {entry.action} <span className="text-gray-400 font-normal">·</span>{' '}
+                                        <span className="font-medium text-gray-700">{entry.target}</span>
+                                    </p>
+                                    {entry.details && <p className="text-xs text-gray-500 mt-0.5">{entry.details}</p>}
+                                    <p className="text-[10px] text-gray-400 mt-1">
+                                        {entry.actorName} ({ROLE_LABELS[entry.actorRole] || entry.actorRole}) · {new Date(entry.at).toLocaleString()}
+                                    </p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
         )}
 
         </div>

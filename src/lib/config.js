@@ -11,7 +11,8 @@
 // Built-in accounts. Kept out of the UI on purpose and deliberately
 // free of password material — the server owns the hashes now, so the
 // browser only ever needs the name and the role.
-// role: 'admin' (full access) | 'teamlead' (review + edit bookings only) | 'user'
+// role: 'admin' (IT: accounts and data tools) | 'teamlead' (runs the operation:
+// bookings, leave, fleet, sheet and policies) | 'user'
 export const DEFAULT_USERS = [
     { username: 'admin', name: 'System Admin', role: 'admin' },
     { username: 'teamlead', name: 'Team Leader', role: 'teamlead' },
@@ -116,13 +117,13 @@ export const VACATION_STATUS = {
 };
 
 
-// The sheet moves draft -> sent -> locked. Locking is what stops the team
-// leader from replacing the sheet the admin has already printed and used
-// to order buses from the vendor.
+// The sheet moves draft -> ready to print -> printed and locked. Locking is
+// what stops a sheet from being changed after the team leader has printed it
+// and ordered the buses from the vendor.
 export const SHEET_STATUS = {
     draft: { label: 'Draft', cls: 'bg-gray-100 text-gray-600' },
-    sent: { label: 'Sent to admin', cls: 'bg-blue-50 text-alorica-blue' },
-    locked: { label: 'Locked after printing', cls: 'bg-green-50 text-green-700' }
+    sent: { label: 'Ready to print', cls: 'bg-blue-50 text-alorica-blue' },
+    locked: { label: 'Printed & locked', cls: 'bg-green-50 text-green-700' }
 };
 
 

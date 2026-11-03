@@ -301,7 +301,7 @@ export var VacationReview = _ref6 => {
   }));
 };
 
-// Vacation reports for admin
+// Vacation reports for the team leader
 export var VacationReports = _ref7 => {
   var {
     vacations,

@@ -6,7 +6,8 @@ function _defineProperty(e, r, t) { return (r = _toPropertyKey(r)) in e ? Object
 function _toPropertyKey(t) { var i = _toPrimitive(t, "string"); return "symbol" == typeof i ? i : i + ""; }
 function _toPrimitive(t, r) { if ("object" != typeof t || !t) return t; var e = t[Symbol.toPrimitive]; if (void 0 !== e) { var i = e.call(t, r || "default"); if ("object" != typeof i) return i; throw new TypeError("@@toPrimitive must return a primitive value."); } return ("string" === r ? String : Number)(t); }
 /*
- * The admin and team-lead dashboard: the fleet, the sheet and the day-to-day overview.
+ * The dashboard, split by role: the team leader gets the operation (fleet,
+ * sheet, bookings and leave), the IT admin gets the accounts and the audit log.
  */
 
 import { Icon } from './common.js';
@@ -122,9 +123,9 @@ export var AdminDashboard = _ref => {
     className: "bg-alorica-blue p-6 sm:p-8 text-white text-center"
   }, /*#__PURE__*/React.createElement("h2", {
     className: "text-2xl sm:text-3xl font-bold mb-2"
-  }, isTeamLead ? 'Team Leader Dashboard' : 'Admin Dashboard'), /*#__PURE__*/React.createElement("p", {
+  }, isTeamLead ? 'Team Leader Dashboard' : 'IT Admin Console'), /*#__PURE__*/React.createElement("p", {
     className: "opacity-80"
-  }, isTeamLead ? 'Adjust the bus distribution and send the sheet to the admin — changes need the employee\'s approval' : 'Print and share the final sheet, manage the bus fleet and user accounts')), /*#__PURE__*/React.createElement("div", {
+  }, isTeamLead ? 'Run the operation: review bookings and leave, adjust the bus distribution, then print and lock the sheet' : 'Manage the accounts, the password requests and the audit trail')), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap justify-center gap-3 pt-6 px-4"
   }, adminTabs.map(tab => /*#__PURE__*/React.createElement("button", {
     key: tab.key,
@@ -138,7 +139,7 @@ export var AdminDashboard = _ref => {
     className: "ml-1 bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5 min-w-[1.25rem]"
   }, tab.badge)))), /*#__PURE__*/React.createElement("div", {
     className: "p-4 sm:p-8"
-  }, adminView === 'bookings' && /*#__PURE__*/React.createElement(React.Fragment, null, isTeamLead && /*#__PURE__*/React.createElement("div", {
+  }, adminView === 'bookings' && isTeamLead && /*#__PURE__*/React.createElement(React.Fragment, null, isTeamLead && /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto mb-6 grid grid-cols-2 lg:grid-cols-4 gap-4"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4 text-center border border-blue-200"
@@ -228,14 +229,14 @@ export var AdminDashboard = _ref => {
     className: "text-xs font-semibold px-2 py-0.5 rounded-full ".concat(SHEET_STATUS[sheetStatus].cls)
   }, SHEET_STATUS[sheetStatus].label)), /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-gray-500 mt-0.5"
-  }, sheet.updatedAt ? "Last updated ".concat(new Date(sheet.updatedAt).toLocaleString()).concat(sheet.updatedBy ? " by ".concat(sheet.updatedBy) : '') : 'Not sent to the admin yet.', sheetStatus === 'locked' && ' — the admin printed it, so the buses are already ordered.'))), isAdmin && (sheetStatus === 'sent' || sheetStatus === 'locked') && /*#__PURE__*/React.createElement("button", {
+  }, sheet.updatedAt ? "Last updated ".concat(new Date(sheet.updatedAt).toLocaleString()).concat(sheet.updatedBy ? " by ".concat(sheet.updatedBy) : '') : 'Not marked ready to print yet.', sheetStatus === 'locked' && ' — it has been printed, so the buses are already ordered.'))), isTeamLead && (sheetStatus === 'sent' || sheetStatus === 'locked') && /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: onSendBack,
     className: "shrink-0 text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-alorica-blue text-alorica-blue hover:bg-alorica-light transition-colors flex items-center gap-1"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "undo-2",
     size: 14
-  }), " Send back to team leader")), isTeamLead && /*#__PURE__*/React.createElement("div", {
+  }), " Reopen sheet")), isTeamLead && /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto mb-6 grid grid-cols-2 lg:grid-cols-3 gap-3"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
@@ -317,19 +318,18 @@ export var AdminDashboard = _ref => {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "clock",
     size: 14
-  }), pendingReviewCount, " booking", pendingReviewCount === 1 ? '' : 's', " waiting with the team leader \u2014 they will appear here once sent.")), isTeamLead ? /*#__PURE__*/React.createElement("div", {
+  }), pendingReviewCount, " booking", pendingReviewCount === 1 ? '' : 's', " waiting with the team leader \u2014 they will appear here once sent.")), sheetStatus === 'draft' ? /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto mb-8"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: onSubmitToAdmin,
-    disabled: sheetStatus === 'locked',
-    className: "w-full font-bold py-4 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all ".concat(sheetStatus === 'locked' ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-alorica-orange hover:shadow-2xl text-white')
+    className: "w-full font-bold py-4 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all bg-alorica-orange hover:shadow-2xl text-white"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "send",
     size: 20
-  }), " Send to Admin"), /*#__PURE__*/React.createElement("p", {
+  }), " Mark ready to print"), /*#__PURE__*/React.createElement("p", {
     className: "text-center text-xs text-gray-400 mt-2"
-  }, sheetStatus === 'locked' ? 'The admin printed this sheet and the buses are already ordered. Ask the admin to send it back before sending again.' : 'Marks the bookings above as reviewed and sends them to the admin for final confirmation.')) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "Marks the bookings above as reviewed and moves the sheet to \"Ready to print\".")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 max-w-4xl mx-auto"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
@@ -382,7 +382,7 @@ export var AdminDashboard = _ref => {
     size: 14
   }), " Copy summary")), /*#__PURE__*/React.createElement("p", {
     className: "text-center text-xs text-gray-400 mb-8"
-  }, "The Excel file contains a Summary sheet plus one sheet per day with employee name, ID, booking time, pickup point, type and assigned bus.")), filteredBookings.length === 0 ? /*#__PURE__*/React.createElement("p", {
+  }, "Printing locks the sheet \u2014 the buses are ordered off it. The Excel file contains a Summary sheet plus one sheet per day with employee name, ID, booking time, pickup point, type and assigned bus.")), filteredBookings.length === 0 ? /*#__PURE__*/React.createElement("p", {
     className: "text-center text-gray-400 py-12"
   }, bookings.length === 0 ? isTeamLead ? 'No bookings yet. Employee bookings will appear here.' : 'No bookings have been sent by the team leader yet.' : 'No bookings match the current filters.') : /*#__PURE__*/React.createElement("div", {
     className: "space-y-8"
@@ -462,7 +462,7 @@ export var AdminDashboard = _ref => {
     }, b.bus)), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2 text-center"
     }, /*#__PURE__*/React.createElement("span", {
-      title: b.submittedAt ? "Sent by ".concat(b.submittedBy || 'Team Leader', " \u2014 ").concat(new Date(b.submittedAt).toLocaleString()) : 'Not sent to the admin yet',
+      title: b.submittedAt ? "Sent by ".concat(b.submittedBy || 'Team Leader', " \u2014 ").concat(new Date(b.submittedAt).toLocaleString()) : 'Not marked ready to print yet',
       className: "text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap ".concat(b.submittedAt ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500')
     }, b.submittedAt ? 'Sent' : 'Pending')), isTeamLead && /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2 text-center"
@@ -480,7 +480,7 @@ export var AdminDashboard = _ref => {
       name: "trash-2",
       size: 16
     })))))))));
-  }))), adminView === 'buses' && /*#__PURE__*/React.createElement("div", {
+  }))), adminView === 'buses' && isTeamLead && /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bg-alorica-light rounded-2xl p-6 mb-8"
@@ -610,7 +610,7 @@ export var AdminDashboard = _ref => {
     className: "text-xs text-gray-500 mt-1"
   }, "Bookings on waitlist"))), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-400 mt-4 text-center"
-  }, "Capacity is applied per day. Bookings that do not fit any bus are placed on the waitlist and flagged in red.")), adminView === 'users' && /*#__PURE__*/React.createElement("div", {
+  }, "Capacity is applied per day. Bookings that do not fit any bus are placed on the waitlist and flagged in red.")), adminView === 'users' && isAdmin && /*#__PURE__*/React.createElement("div", {
     className: "max-w-3xl mx-auto"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bg-alorica-light rounded-2xl p-6 mb-8"
@@ -742,7 +742,7 @@ export var AdminDashboard = _ref => {
     size: 16
   }))))))))), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-400 mt-4 text-center"
-  }, "Pick \"Regular User\" for employees or \"Team Leader\" for reviewers. Team Leaders can review, edit and forward bookings but cannot export or print the sheet. Accounts are saved in this browser."), /*#__PURE__*/React.createElement("div", {
+  }, "Pick \"Regular User\" for employees or \"Team Leader\" for reviewers. Team Leaders run the operation \u2014 they review bookings and leave, manage the fleet and print the sheet."), /*#__PURE__*/React.createElement("div", {
     className: "mt-10 bg-gray-50 border border-gray-100 rounded-2xl p-6"
   }, /*#__PURE__*/React.createElement("h3", {
     className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2"
@@ -777,7 +777,7 @@ export var AdminDashboard = _ref => {
       setImporting(true);
       onImportBackup(file);
     }
-  }))))), adminView === 'requests' && /*#__PURE__*/React.createElement("div", {
+  }))))), adminView === 'requests' && isAdmin && /*#__PURE__*/React.createElement("div", {
     className: "max-w-3xl mx-auto"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bg-alorica-light rounded-2xl p-6 mb-8"
@@ -849,7 +849,7 @@ export var AdminDashboard = _ref => {
     className: "text-xs text-gray-400 text-center"
   }, r.resolvedAt ? "by ".concat(r.resolvedBy || 'admin', " \xB7 ").concat(new Date(r.resolvedAt).toLocaleString()) : '—')))))))), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-400 mt-4 text-center"
-  }, "The request is stored on the server, so the admin and the team leader both see it. The employee is not emailed \u2014 pass the temporary password to them yourself.")), adminView === 'changes' && /*#__PURE__*/React.createElement("div", {
+  }, "The request is stored on the server, so the IT admin sees it from any device. The employee is not emailed \u2014 pass the temporary password to them yourself.")), adminView === 'changes' && isTeamLead && /*#__PURE__*/React.createElement("div", {
     className: "max-w-4xl mx-auto space-y-10"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bg-alorica-light rounded-2xl p-6"
@@ -937,16 +937,55 @@ export var AdminDashboard = _ref => {
     }), " Emergency override"), r.status === 'overridden' && r.overrideReason && /*#__PURE__*/React.createElement("p", {
       className: "text-[10px] text-red-600 mt-1 max-w-[14rem] mx-auto"
     }, r.overrideReason)));
-  }))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
-    className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-3"
+  })))))), adminView === 'vacations' && isTeamLead && /*#__PURE__*/React.createElement("div", {
+    className: "max-w-4xl mx-auto space-y-10"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "bg-alorica-light rounded-2xl p-6 mb-8"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "calendar-check",
+    size: 20,
+    className: "text-alorica-orange"
+  }), " Pending Leave Requests"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-600"
+  }, "Review and approve or reject employee leave requests.")), /*#__PURE__*/React.createElement(VacationReview, {
+    vacations: vacations,
+    allUsers: [...DEFAULT_USERS, ...customUsers],
+    onApprove: onApproveVacation,
+    onReject: onRejectVacation,
+    currentUser: currentUser
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "bg-alorica-light rounded-2xl p-6 mb-8"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "bar-chart-2",
+    size: 20,
+    className: "text-alorica-orange"
+  }), " Leave Reports"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-600"
+  }, "View leave statistics and export reports.")), /*#__PURE__*/React.createElement(VacationReports, {
+    vacations: vacations,
+    allUsers: [...DEFAULT_USERS, ...customUsers],
+    vacationBalances: vacationBalances,
+    onExportExcel: onExportVacationExcel
+  }))), adminView === 'audit' && isAdmin && /*#__PURE__*/React.createElement("div", {
+    className: "max-w-4xl mx-auto"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-alorica-light rounded-2xl p-6 mb-8"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "history",
     size: 20,
     className: "text-alorica-orange"
-  }), " Activity log"), auditLog.length === 0 ? /*#__PURE__*/React.createElement("p", {
+  }), " Activity log"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-600"
+  }, "Every action recorded by the system, newest first. It is trimmed to the last 400 entries.")), auditLog.length === 0 ? /*#__PURE__*/React.createElement("p", {
     className: "text-center text-gray-400 py-8 text-sm"
   }, "Nothing recorded yet.") : /*#__PURE__*/React.createElement("div", {
-    className: "border border-gray-100 rounded-2xl divide-y divide-gray-50 max-h-[32rem] overflow-y-auto"
+    className: "border border-gray-100 rounded-2xl divide-y divide-gray-50 max-h-[36rem] overflow-y-auto"
   }, [...auditLog].reverse().map(entry => /*#__PURE__*/React.createElement("div", {
     key: entry.id,
     className: "px-4 py-3 flex items-start gap-3"
@@ -967,40 +1006,5 @@ export var AdminDashboard = _ref => {
     className: "text-xs text-gray-500 mt-0.5"
   }, entry.details), /*#__PURE__*/React.createElement("p", {
     className: "text-[10px] text-gray-400 mt-1"
-  }, entry.actorName, " (", ROLE_LABELS[entry.actorRole] || entry.actorRole, ") \xB7 ", new Date(entry.at).toLocaleString()))))))), adminView === 'vacations' && /*#__PURE__*/React.createElement(React.Fragment, null, isTeamLead ? /*#__PURE__*/React.createElement("div", {
-    className: "max-w-4xl mx-auto"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bg-alorica-light rounded-2xl p-6 mb-8"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "calendar-check",
-    size: 20,
-    className: "text-alorica-orange"
-  }), " Pending Leave Requests"), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-600"
-  }, "Review and approve or reject employee leave requests.")), /*#__PURE__*/React.createElement(VacationReview, {
-    vacations: vacations,
-    allUsers: [...DEFAULT_USERS, ...customUsers],
-    onApprove: onApproveVacation,
-    onReject: onRejectVacation,
-    currentUser: currentUser
-  })) : /*#__PURE__*/React.createElement("div", {
-    className: "max-w-4xl mx-auto"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bg-alorica-light rounded-2xl p-6 mb-8"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "flex items-center gap-2 text-alorica-blue font-bold text-lg mb-2"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "bar-chart-2",
-    size: 20,
-    className: "text-alorica-orange"
-  }), " Leave Reports"), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-600"
-  }, "View leave statistics and export reports.")), /*#__PURE__*/React.createElement(VacationReports, {
-    vacations: vacations,
-    allUsers: [...DEFAULT_USERS, ...customUsers],
-    vacationBalances: vacationBalances,
-    onExportExcel: onExportVacationExcel
-  })))));
+  }, entry.actorName, " (", ROLE_LABELS[entry.actorRole] || entry.actorRole, ") \xB7 ", new Date(entry.at).toLocaleString()))))))));
 };

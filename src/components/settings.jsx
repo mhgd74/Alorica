@@ -1,6 +1,7 @@
 /*
  * The settings screen. Personal preferences are kept on the device; the
- * shift times, leave balances and booking rules are admin settings that sync.
+ * shift times, leave balances and booking rules belong to the team leader
+ * and are saved into the shared collection so every device sees them.
  */
 
 import { Icon } from './common.js';
@@ -15,13 +16,13 @@ const { useState, useEffect, useMemo } = React;
  * Settings
  * =============================================================
  * Everything behind the gear in the header. Display preferences are
- * personal and stay on this device; the admin sections below them are
- * saved into the shared `settings` collection, so the shift presets
+ * personal and stay on this device; the team-leader sections below them
+ * are saved into the shared `settings` collection, so the shift presets
  * and leave defaults reach every device.
  */
 export const SettingsDialog = ({
     section, onSection, onClose,
-    currentUser, role, isAdmin,
+    currentUser, role,
     preferences, onPreferences,
     settings, onSaveSettings,
     onExportBackup, onImportBackup, importing, setImporting,
@@ -31,6 +32,7 @@ export const SettingsDialog = ({
     const [draft, setDraft] = useState(settings);
     const [shiftDir, setShiftDir] = useState('arrival');
     const [saved, setSaved] = useState(false);
+    const isTeamLead = role === 'teamlead';
 
     // Switching section starts from a clean copy, so a half-typed edit
     // is never carried across. A save refreshes the copy too, but keeps
@@ -43,7 +45,7 @@ export const SettingsDialog = ({
         { key: 'account', label: 'Profile & password', icon: 'user' },
         { key: 'notifications', label: 'Notifications', icon: 'bell' },
         { key: 'data', label: 'Sync & data', icon: 'database' },
-        ...(isAdmin ? [
+        ...(isTeamLead ? [
             { key: 'shifts', label: 'Shift times', icon: 'clock' },
             { key: 'leave', label: 'Leave defaults', icon: 'calendar' },
             { key: 'rules', label: 'Booking rules', icon: 'bus' }
@@ -260,7 +262,7 @@ export const SettingsDialog = ({
                         </>
                     )}
 
-                    {section === 'shifts' && isAdmin && (
+                    {section === 'shifts' && isTeamLead && (
                         <>
                             <div className="flex items-center justify-between gap-3">
                                 <div className="inline-flex bg-gray-100 rounded-lg p-0.5">
@@ -319,7 +321,7 @@ export const SettingsDialog = ({
                         </>
                     )}
 
-                    {section === 'leave' && isAdmin && (
+                    {section === 'leave' && isTeamLead && (
                         <>
                             <p className="text-xs text-gray-500">Days granted to an employee who has no balance record yet. Balances already on file are untouched.</p>
                             {Object.keys(DEFAULT_VACATION_DAYS).map((key) => (
@@ -340,7 +342,7 @@ export const SettingsDialog = ({
                         </>
                     )}
 
-                    {section === 'rules' && isAdmin && (
+                    {section === 'rules' && isTeamLead && (
                         <>
                             <div className="flex items-center justify-between gap-3">
                                 <div>
@@ -386,7 +388,7 @@ export const SettingsDialog = ({
                     {saved && <span className="mr-auto text-xs font-semibold text-green-600">Saved</span>}
                     {draft.updatedAt && !saved && (
                         <span className="mr-auto text-xs text-gray-400">
-                            Last changed by {draft.updatedBy || 'admin'}
+                            Last changed by {draft.updatedBy || 'the team leader'}
                         </span>
                     )}
                     <button

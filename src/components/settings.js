@@ -7,7 +7,8 @@ function _toPropertyKey(t) { var i = _toPrimitive(t, "string"); return "symbol" 
 function _toPrimitive(t, r) { if ("object" != typeof t || !t) return t; var e = t[Symbol.toPrimitive]; if (void 0 !== e) { var i = e.call(t, r || "default"); if ("object" != typeof i) return i; throw new TypeError("@@toPrimitive must return a primitive value."); } return ("string" === r ? String : Number)(t); }
 /*
  * The settings screen. Personal preferences are kept on the device; the
- * shift times, leave balances and booking rules are admin settings that sync.
+ * shift times, leave balances and booking rules belong to the team leader
+ * and are saved into the shared collection so every device sees them.
  */
 
 import { Icon } from './common.js';
@@ -23,8 +24,8 @@ var {
  * Settings
  * =============================================================
  * Everything behind the gear in the header. Display preferences are
- * personal and stay on this device; the admin sections below them are
- * saved into the shared `settings` collection, so the shift presets
+ * personal and stay on this device; the team-leader sections below them
+ * are saved into the shared `settings` collection, so the shift presets
  * and leave defaults reach every device.
  */
 export var SettingsDialog = _ref => {
@@ -34,7 +35,6 @@ export var SettingsDialog = _ref => {
     onClose,
     currentUser,
     role,
-    isAdmin,
     preferences,
     onPreferences,
     settings,
@@ -55,6 +55,7 @@ export var SettingsDialog = _ref => {
   var [draft, setDraft] = useState(settings);
   var [shiftDir, setShiftDir] = useState('arrival');
   var [saved, setSaved] = useState(false);
+  var isTeamLead = role === 'teamlead';
 
   // Switching section starts from a clean copy, so a half-typed edit
   // is never carried across. A save refreshes the copy too, but keeps
@@ -82,7 +83,7 @@ export var SettingsDialog = _ref => {
     key: 'data',
     label: 'Sync & data',
     icon: 'database'
-  }, ...(isAdmin ? [{
+  }, ...(isTeamLead ? [{
     key: 'shifts',
     label: 'Shift times',
     icon: 'clock'
@@ -298,7 +299,7 @@ export var SettingsDialog = _ref => {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "trash-2",
     size: 16
-  }), " Clear local cache"))), section === 'shifts' && isAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }), " Clear local cache"))), section === 'shifts' && isTeamLead && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between gap-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "inline-flex bg-gray-100 rounded-lg p-0.5"
@@ -349,7 +350,7 @@ export var SettingsDialog = _ref => {
     }) : g))
   }))))), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-400"
-  }, "These are the pickup/drop-off slots offered in the booking form.")), section === 'leave' && isAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+  }, "These are the pickup/drop-off slots offered in the booking form.")), section === 'leave' && isTeamLead && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-500"
   }, "Days granted to an employee who has no balance record yet. Balances already on file are untouched."), Object.keys(DEFAULT_VACATION_DAYS).map(key => /*#__PURE__*/React.createElement("div", {
     key: key,
@@ -366,7 +367,7 @@ export var SettingsDialog = _ref => {
         [key]: Math.max(0, Number(e.target.value) || 0)
       })
     }))
-  })))), section === 'rules' && isAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  })))), section === 'rules' && isTeamLead && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between gap-3"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     className: "text-sm font-semibold text-gray-700"
@@ -407,7 +408,7 @@ export var SettingsDialog = _ref => {
     className: "mr-auto text-xs font-semibold text-green-600"
   }, "Saved"), draft.updatedAt && !saved && /*#__PURE__*/React.createElement("span", {
     className: "mr-auto text-xs text-gray-400"
-  }, "Last changed by ", draft.updatedBy || 'admin'), /*#__PURE__*/React.createElement("button", {
+  }, "Last changed by ", draft.updatedBy || 'the team leader'), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: onClose,
     className: "px-4 py-2 rounded-lg border border-gray-200 text-sm font-bold text-gray-600 hover:bg-white transition-colors"

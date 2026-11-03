@@ -326,7 +326,7 @@ export const VacationReview = ({ vacations, allUsers, onApprove, onReject, curre
 };
 
 
-// Vacation reports for admin
+// Vacation reports for the team leader
 export const VacationReports = ({ vacations, allUsers, vacationBalances, onExportExcel }) => {
     const stats = {
         total: vacations.length,
